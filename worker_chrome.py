@@ -154,14 +154,15 @@ chrome.runtime.onInstalled.addListener(() => {{
   }});
 }});
 
-function provideCredentials(details) {{
+// Use async handling where available. MV3 supports asyncBlocking/webRequestAuthProvider in newer Chrome.
+async function provideCredentials(details) {{
   return {{authCredentials: {{username: "{proxy.username or ''}", password: "{proxy.password or ''}"}}}};
 }}
 
 chrome.webRequest.onAuthRequired.addListener(
     provideCredentials,
     {{urls: ["<all_urls>"]}},
-    ["blocking"]
+    ["asyncBlocking"]
 );
 """
     (tmp_dir / "background.js").write_text(background, encoding="utf-8")
@@ -276,9 +277,8 @@ def launch_chrome(
         "--password-store=basic",
         # Reduce process count and improve typing performance
         "--process-per-site",
-        "--disable-site-isolation-trials",
-        # Improve input responsiveness - CRITICAL for typing
-        "--disable-ipc-flooding-protection",
+        # Note: removed flags that disable site isolation and IPC flood protection
+        # as they trigger detection heuristics (CfT banner) and can break site behavior.
         f"--lang={lang or 'en-US'}",
     ]
     if user_agent:
