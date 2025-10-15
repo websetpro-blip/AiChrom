@@ -125,9 +125,20 @@ function FindProxyForURL(url, host) {{
     return str(pac_file)
 
 
-def _make_auth_extension(proxy: Proxy) -> str:
-    """Создаёт расширение (MV3) для установки прокси и автоматической авторизации."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="aichrome_ext_"))
+def _make_auth_extension(proxy: Proxy, profile_id: str) -> str:
+    """Создаёт расширение (MV3) для установки прокси и автоматической авторизации для конкретного профиля.
+    Расширение размещается в `extensions/proxy_<profile_id>` внутри app root и перезаписывается при каждом запуске.
+    """
+    root = app_root()
+    ext_dir = root / "extensions" / f"proxy_{profile_id}"
+    # recreate per-run to ensure credentials updated
+    try:
+        if ext_dir.exists():
+            shutil.rmtree(ext_dir, ignore_errors=True)
+        ext_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
     manifest = {
         "manifest_version": 3,
         "name": "Proxy Auth Helper",
@@ -136,7 +147,7 @@ def _make_auth_extension(proxy: Proxy) -> str:
         "host_permissions": ["<all_urls>"],
         "background": {"service_worker": "background.js"},
     }
-    (tmp_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    (ext_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     background = f"""
 function setProxyConfig() {{
@@ -147,18 +158,47 @@ function setProxyConfig() {{
       bypassList: ["localhost","127.0.0.1"]
     }}
   }};
+  console.log('Proxy Auth Helper: applying proxy config', config);
   chrome.proxy.settings.set({{ value: config, scope: "regular" }}, () => {{
-    if (chrome.runtime.lastError) console.error("Proxy setup failed:", chrome.runtime.lastError);
+    if (chrome.runtime.lastError) {{
+      console.error("Proxy setup failed:", chrome.runtime.lastError);
+    }} else {{
+      console.log('Proxy setup applied successfully');
+    }}
   }});
 }}
 
-chrome.runtime.onInstalled.addListener(setProxyConfig);
-chrome.runtime.onStartup.addListener(setProxyConfig);
-// Also try to set immediately in case service worker already running
-try {{ setProxyConfig(); }} catch (e) {{ console.error('Immediate proxy set failed', e); }}
+function attemptSet(retries, delayMs) {{
+  try {{
+    setProxyConfig();
+  }} catch (e) {{
+    console.error('setProxyConfig error', e);
+  }}
+  if (retries > 0) {{
+    setTimeout(() => {{
+      console.log('Proxy Auth Helper: retrying setProxyConfig, retries left', retries-1);
+      attemptSet(retries-1, Math.min(30000, delayMs*2));
+    }}, delayMs);
+  }}
+}}
 
-// Use async handling where available. MV3 supports asyncBlocking/webRequestAuthProvider in newer Chrome.
+chrome.runtime.onInstalled.addListener(() => {{
+  console.log('Proxy Auth Helper: onInstalled');
+  attemptSet(5, 1000);
+}});
+chrome.runtime.onStartup.addListener(() => {{
+  console.log('Proxy Auth Helper: onStartup');
+  attemptSet(5, 1000);
+}});
+// Try immediately in case service worker already running
+try {{
+  attemptSet(5, 500);
+}} catch (e) {{
+  console.error('Immediate proxy set failed', e);
+}}
+
 async function provideCredentials(details) {{
+  console.log('Proxy Auth Helper: onAuthRequired for', details && details.url);
   return {{ authCredentials: {{ username: "{proxy.username or ''}", password: "{proxy.password or ''}" }} }};
 }}
 
@@ -168,8 +208,8 @@ chrome.webRequest.onAuthRequired.addListener(
     ["asyncBlocking"]
 );
 """
-    (tmp_dir / "background.js").write_text(background, encoding="utf-8")
-    return str(tmp_dir)
+    (ext_dir / "background.js").write_text(background, encoding="utf-8")
+    return str(ext_dir)
 
 
 def _make_webrtc_block_extension() -> str:
