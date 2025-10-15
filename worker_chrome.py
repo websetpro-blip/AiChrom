@@ -136,8 +136,10 @@ def _make_auth_extension(proxy: Proxy, profile_id: str) -> str:
         if ext_dir.exists():
             shutil.rmtree(ext_dir, ignore_errors=True)
         ext_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Failed to create extension directory: %s", e)
+        # fallback to temp dir if we can't write to app_root
+        ext_dir = Path(tempfile.mkdtemp(prefix=f"aichrome_ext_proxy_{profile_id[:8]}_"))
 
     manifest = {
         "manifest_version": 3,
