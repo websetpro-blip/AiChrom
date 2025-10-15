@@ -299,7 +299,7 @@ def launch_chrome(
         extension_dirs.append(webrtc_ext)
         if proxy.username:
             # Modern MV3 extension handles both proxy setup and auth
-            auth_ext = _make_auth_extension(proxy)
+            auth_ext = _make_auth_extension(proxy, profile_id)
             extension_dirs.append(auth_ext)
         else:
             # For simple proxies without auth, the direct flag is simplest
