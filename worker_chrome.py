@@ -235,18 +235,20 @@ def launch_chrome(
     lock = ProfileLock(profile_dir)
     lock.acquire()
 
-    # Приоритет: сначала ищем рабочий Chrome, потом системный
-    chrome_path = detect_worker_chrome()
-    if chrome_path:
-        log.info("Using worker Chrome: %s", chrome_path)
-    elif allow_system_chrome:
+    # Приоритет: предпочитаем системный Stable Chrome, затем portable/worker Chrome
+    chrome_path = None
+    if allow_system_chrome:
         try:
             from tools.chrome_dist import guess_system_chrome
             chrome_path = guess_system_chrome()
             if chrome_path:
-                log.info("Falling back to system Chrome: %s", chrome_path)
+                log.info("Using system Chrome: %s", chrome_path)
         except Exception:
-            pass
+            chrome_path = None
+    if not chrome_path:
+        chrome_path = detect_worker_chrome()
+        if chrome_path:
+            log.info("Falling back to worker Chrome: %s", chrome_path)
     
     if not chrome_path:
         # Если ничего не найдено, показываем ошибку
@@ -302,6 +304,26 @@ def launch_chrome(
         else:
             # For simple proxies without auth, the direct flag is simplest
             args.append(f"--proxy-server={proxy.scheme}://{proxy.host}:{proxy.port}")
+        
+        # If we used MV3 extension path, perform self-test and fallback to PAC if it fails
+        def _ensure_proxy_or_fallback(p: Proxy):
+            try:
+                # run same self-test as above
+                resp = requests.get("https://api.ipify.org?format=json", timeout=6)
+                ip = resp.json().get("ip")
+                geo = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,query", timeout=6).json()
+                if geo.get("status") != "success":
+                    raise RuntimeError("geo failed")
+                return True
+            except Exception:
+                # fallback: create PAC and use proxy-pac-url flag
+                pac = _make_pac_file(p)
+                args.append(f"--proxy-pac-url=file:///{pac.replace('\\','/')}")
+                log.info("Proxy self-test failed — using PAC fallback: %s", pac)
+                return False
+
+        if proxy:
+            _ensure_proxy_or_fallback(proxy)
     
     if extension_dirs:
         # Use comma as separator for extension paths on Windows
