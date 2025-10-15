@@ -1,21 +1,7 @@
-param(
-    [string]$AppName = "AiChrome",
-    [string]$ExePath = "C:\AI\AiChrome\dist\AiChrome\AiChrome.exe",
-    [string]$IconPath = "C:\AI\AiChrome\assets\icon.ico"
-)
-
-$WshShell = New-Object -comObject WScript.Shell
-$DesktopPath = [Environment]::GetFolderPath("Desktop")
-$ShortcutPath = Join-Path $DesktopPath "$AppName.lnk"
-
-$Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-$Shortcut.TargetPath = $ExePath
-$Shortcut.WorkingDirectory = Split-Path $ExePath
-$Shortcut.Description = "AiChrome v1.2 - Browser Profile Manager with Anti-Detection"
-$Shortcut.IconLocation = $IconPath
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\AiChrome.lnk")
+$Shortcut.TargetPath = "$PSScriptRoot\StartAiChrome.bat"
+$Shortcut.WorkingDirectory = $PSScriptRoot
+$Shortcut.IconLocation = "$PSScriptRoot\aichrome.ico"
 $Shortcut.Save()
-
-Write-Host "Shortcut created: $ShortcutPath"
-Write-Host "Application: $AppName"
-Write-Host "Path: $ExePath"
-Write-Host "Icon: $IconPath"
+Write-Host "Desktop shortcut created successfully!"
