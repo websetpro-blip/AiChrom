@@ -139,7 +139,7 @@ def _make_auth_extension(proxy: Proxy) -> str:
     (tmp_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
     background = f"""
-chrome.runtime.onInstalled.addListener(() => {{
+function setProxyConfig() {{
   const config = {{
     mode: "fixed_servers",
     rules: {{
@@ -147,21 +147,24 @@ chrome.runtime.onInstalled.addListener(() => {{
       bypassList: ["localhost","127.0.0.1"]
     }}
   }};
-  chrome.proxy.settings.set({{value: config, scope: "regular"}}, () => {{
-    if (chrome.runtime.lastError) {{
-      console.error('Proxy setup failed:', chrome.runtime.lastError);
-    }}
+  chrome.proxy.settings.set({{ value: config, scope: "regular" }}, () => {{
+    if (chrome.runtime.lastError) console.error("Proxy setup failed:", chrome.runtime.lastError);
   }});
-}});
+}}
+
+chrome.runtime.onInstalled.addListener(setProxyConfig);
+chrome.runtime.onStartup.addListener(setProxyConfig);
+// Also try to set immediately in case service worker already running
+try {{ setProxyConfig(); }} catch (e) {{ console.error('Immediate proxy set failed', e); }}
 
 // Use async handling where available. MV3 supports asyncBlocking/webRequestAuthProvider in newer Chrome.
 async function provideCredentials(details) {{
-  return {{authCredentials: {{username: "{proxy.username or ''}", password: "{proxy.password or ''}"}}}};
+  return {{ authCredentials: {{ username: "{proxy.username or ''}", password: "{proxy.password or ''}" }} }};
 }}
 
 chrome.webRequest.onAuthRequired.addListener(
     provideCredentials,
-    {{urls: ["<all_urls>"]}},
+    {{ urls: ["<all_urls>"] }},
     ["asyncBlocking"]
 );
 """
