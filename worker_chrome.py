@@ -320,6 +320,29 @@ def launch_chrome(
             "--use-gl=swiftshader",
             "--disable-accelerated-2d-canvas",
         ])
+    
+    # Self-test: verify proxy IP and geolocation before launching
+    def _proxy_self_test(p: Proxy) -> bool:
+        try:
+            resp = requests.get("https://api.ipify.org?format=json", timeout=6)
+            ip = resp.json().get("ip")
+            if not ip:
+                log.warning("Self-test: ipify returned no ip")
+                return False
+            geo = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,query", timeout=6).json()
+            if geo.get("status") != "success":
+                log.warning("Self-test: ip-api failed for %s", ip)
+                return False
+            log.info("Proxy self-test: ip=%s country=%s", geo.get("query"), geo.get("country"))
+            return True
+        except Exception as e:
+            log.exception("Proxy self-test error: %s", e)
+            return False
+
+    if proxy:
+        ok = _proxy_self_test(proxy)
+        if not ok:
+            log.warning("Proxy self-test failed — launching anyway but consider verifying proxy")
 
     log.info("Launching Chrome:\n  %s", "\n  ".join(args))
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
