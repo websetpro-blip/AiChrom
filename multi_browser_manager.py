@@ -855,6 +855,17 @@ class BrowserManagerApp:
         log.info("Launching profile %s with proxy %s", profile.name, proxy.host if proxy else "direct")
         try:
             flags = [f"--window-size={profile.screen_width},{profile.screen_height}"]
+
+            # Pre-check proxy via validate_proxy (non-blocking) and decide fallback strategy
+            use_pac = False
+            try:
+                info = validate_proxy(proxy) if proxy else None
+                if proxy and not info:
+                    # failed quick validation, fallback to PAC
+                    use_pac = True
+            except Exception:
+                use_pac = True
+
             pid = launch_chrome(
                 profile_id=profile.id,
                 user_agent=profile.user_agent,
@@ -863,6 +874,7 @@ class BrowserManagerApp:
                 proxy=proxy,
                 extra_flags=flags,
                 allow_system_chrome=True,
+                force_pac=use_pac,
             )
         except Exception as exc:
             log.error("Failed to launch Chrome: %s", exc)

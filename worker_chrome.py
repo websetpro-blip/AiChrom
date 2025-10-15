@@ -268,6 +268,7 @@ def launch_chrome(
     proxy: Optional[Proxy],
     extra_flags: Optional[List[str]] = None,
     allow_system_chrome: bool = True,
+    force_pac: bool = False,
 ) -> int:
     root = app_root()
     profile_dir = root / "profiles" / profile_id
@@ -337,33 +338,40 @@ def launch_chrome(
     if proxy:
         webrtc_ext = _make_webrtc_block_extension()
         extension_dirs.append(webrtc_ext)
-        if proxy.username:
-            # Modern MV3 extension handles both proxy setup and auth
-            auth_ext = _make_auth_extension(proxy, profile_id)
-            extension_dirs.append(auth_ext)
-        else:
-            # For simple proxies without auth, the direct flag is simplest
-            args.append(f"--proxy-server={proxy.scheme}://{proxy.host}:{proxy.port}")
-        
-        # If we used MV3 extension path, perform self-test and fallback to PAC if it fails
-        def _ensure_proxy_or_fallback(p: Proxy):
-            try:
-                # run same self-test as above
-                resp = requests.get("https://api.ipify.org?format=json", timeout=6)
-                ip = resp.json().get("ip")
-                geo = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,query", timeout=6).json()
-                if geo.get("status") != "success":
-                    raise RuntimeError("geo failed")
-                return True
-            except Exception:
-                # fallback: create PAC and use proxy-pac-url flag
-                pac = _make_pac_file(p)
-                args.append(f"--proxy-pac-url=file:///{pac.replace('\\','/')}")
-                log.info("Proxy self-test failed — using PAC fallback: %s", pac)
-                return False
 
-        if proxy:
-            _ensure_proxy_or_fallback(proxy)
+        # If force_pac is requested, prefer PAC URL and skip extension auth path
+        if force_pac:
+            pac_file = _make_pac_file(proxy)
+            args.append(f"--proxy-pac-url=file:///{pac_file.replace('\\','/')}")
+            log.info("Force PAC fallback enabled, using PAC: %s", pac_file)
+        else:
+            if proxy.username:
+                # Modern MV3 extension handles both proxy setup and auth
+                auth_ext = _make_auth_extension(proxy, profile_id)
+                extension_dirs.append(auth_ext)
+            else:
+                # For simple proxies without auth, the direct flag is simplest
+                args.append(f"--proxy-server={proxy.scheme}://{proxy.host}:{proxy.port}")
+
+            # If we used MV3 extension path, perform self-test and fallback to PAC if it fails
+            def _ensure_proxy_or_fallback(p: Proxy):
+                try:
+                    # run same self-test as above
+                    resp = requests.get("https://api.ipify.org?format=json", timeout=6)
+                    ip = resp.json().get("ip")
+                    geo = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,query", timeout=6).json()
+                    if geo.get("status") != "success":
+                        raise RuntimeError("geo failed")
+                    return True
+                except Exception:
+                    # fallback: create PAC and use proxy-pac-url flag
+                    pac = _make_pac_file(p)
+                    args.append(f"--proxy-pac-url=file:///{pac.replace('\\','/')}")
+                    log.info("Proxy self-test failed — using PAC fallback: %s", pac)
+                    return False
+
+            if proxy:
+                _ensure_proxy_or_fallback(proxy)
     
     if extension_dirs:
         # Use comma as separator for extension paths on Windows
