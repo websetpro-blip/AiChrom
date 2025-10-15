@@ -53,3 +53,26 @@ Open issues and PRs on GitHub.
 - Настройки и профили сохраняются автоматически в `browser_profiles.json` и `profiles/`.
 - Для проверки Self-Test используется `requests` и требуется рабочее интернет-соединение.
 - Портативный Chrome можно положить в `tools/chrome/`; иначе будет использован системный.
+
+
+## Per-profile proxy & MV3 extension
+
+AiChrome поддерживает пер-профильные прокси с автоматической аутентификацией.
+
+- Каждому профилю соответствует свой `--user-data-dir`, поэтому куки и хранилище изолированы.
+- Chromium не принимает креды в `--proxy-server`. Для аутентификации мы генерируем Manifest V3 расширение
+  per-profile, которое устанавливает `chrome.proxy.settings` и обрабатывает `onAuthRequired` через `webRequest`/`webRequestAuthProvider`.
+- Для SOCKS прокси добавляем `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <proxy_host>"` чтобы избежать утечек DNS.
+
+Quick manual test
+
+1. Запусти профиль через AiChrome.
+2. В запущенном окне открой `chrome://extensions`, включи Developer mode и проверь background service worker расширения (Inspect) при проблемах.
+3. Проверь IP: `https://api.ipify.org?format=json` и гео: `http://ip-api.com/json`.
+
+Автоматизировано
+
+- При запуске AiChrome автоматически генерируется расширение в `extensions/proxy_<profileId>` и передаётся через `--load-extension`.
+- Перед запуском выполняется self-test (ipify+ip-api); при провале используется PAC-файл через `--proxy-pac-url`.
+
+Если хочешь, могу оформить PR с отдельной веткой и CI для линтинга — скажи "create PR".
