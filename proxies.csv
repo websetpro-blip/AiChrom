@@ -1,0 +1,6 @@
+type,host,port,username,password,country
+HTTP,8.8.8.8,8080,,,US
+HTTP,1.1.1.1,8080,,,US
+SOCKS5,127.0.0.1,1080,,,US
+HTTP,proxy.example.com,3128,,,US
+SOCKS5,socks.example.com,1080,,,US

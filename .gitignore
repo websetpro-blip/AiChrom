@@ -1,0 +1,60 @@
+# AiChrome .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+*.whl
+*.tar.gz
+
+# PyInstaller / packaging
+AiChrome.spec
+AiChrome.exe
+dist/AiChrome/
+build_executable.py
+
+# Caches and logs
+cache/
+logs/
+*.log
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Profiles and large generated data
+profiles/
+release/
+
+/dist
+/build
+/__pycache__
+/logs/*.log
+/cache/*.json
+/profiles/*/.aichrome.lock
+/aichrome_tmp_ext_*
+/release
