@@ -1,0 +1,201 @@
+Ок, соберу всё в одну «ТЗ-страницу» — что это за проект, как он устроен и что должно быть в итоге.
+
+Суть проекта
+
+BrowserVault — настольная платформа (Electron + Node), которая позволяет из одного окна запускать до 10+ независимых браузерных профилей.
+Каждый профиль:
+
+имеет свою папку сессии (закладки/вкладки/куки/логины сохраняются);
+
+запускается в отдельном окне Chromium (Playwright persistent context);
+
+может работать через свой прокси (смена в 1 клик);
+
+имеет собственный набор отпечатков (userAgent, язык, таймзона, экран, и т.д.; позже — Canvas/WebGL/Audio spoof).
+
+Платформа запускается одним ярлыком, без отдельных терминалов; сервер API поднимается внутри Electron. Есть «здоровье» /api/health, логи и автодиагностика (runner.ps1), чтобы никакие «висюки» не случались.
+
+Что должно получиться (MVP)
+
+Один ярлык → одно окно BrowserVault (сервер внутри Electron).
+
+Вкладки: Профили / Прокси / Статистика / Настройки — UI берём из твоих 3 файлов (index.html, app.js, style.css).
+
+На вкладке «Профили»:
+
+Список профилей (id, название, статус, OS, прокси, даты, действия).
+
+Создание профиля (id, название, locale, timezone, viewport, userAgent, proxy).
+
+Запуск/Стоп профиля — новое окно Chromium, сессия хранится в %APPDATA%\BrowserVault\profiles\<id>\.
+
+Одновременный запуск 10 и более профилей.
+
+Менеджер прокси (MVP):
+
+хранение и назначение прокси профилю;
+
+«Быстрая смена прокси» (стоп → поменять → запуск).
+
+(Опционально) тест скорости/валидности.
+
+Автоуправление (для Cursor/Gemini): tools/runner.ps1 — старт/стоп, ожидание /api/health, логи, без зависонов.
+
+Логи: авто-сохранение stdout/stderr Electron в logs/, кнопка «показать логи».
+
+Архитектура (просто и надёжно)
+
+Electron (main) — точка входа (electron-main.cjs), скрывает меню, стартует API-сервер и грузит твой UI из ui/.
+
+API-сервер (Node/Express) — dist/server/index.js, отдаёт UI и даёт REST эндпоинты.
+
+Runtime (Playwright) — dist/server/runtime.js, управляет persistent-контекстами Chromium.
+
+UI — твои ui/index.html, ui/app.js, ui/style.css (внешний вид как на твоём скриншоте).
+
+Структура проекта
+C:\AI\BrowserVault\
+├─ electron-main.cjs            # Electron main: старт сервера и загрузка UI
+├─ ui\
+│  ├─ index.html                # твой интерфейс
+│  ├─ app.js                    # твоя логика + тонкий мост к API
+│  └─ style.css                 # твои стили
+├─ dist\
+│  └─ server\
+│     ├─ index.js               # Express API + раздача UI
+│     └─ runtime.js             # launch/stop (Playwright)
+├─ tools\
+│  └─ runner.ps1                # старт/стоп/логи без зависаний
+├─ logs\                        # stdout/stderr Electron
+├─ package.json                 # "main": "electron-main.cjs"
+└─ Start.vbs                    # ярлык: Electron без чёрного окна
+
+Контракты API (MVP)
+
+GET /api/health → { ok, service:"BrowserVault", ts, running:[id...] }
+
+GET /api/profiles → [ { id, name, locale, timezone, viewport, userAgent, proxy, tags, created, lastUsed, ... } ]
+
+POST /api/profiles → создать/обновить профиль (id обязателен) → { ok:true, id }
+
+DELETE /api/profiles/:id → удаляет запись и останавливает профиль → { ok:true }
+
+POST /api/profiles/:id/launch → запускает профиль → { ok:true, id }
+
+POST /api/profiles/:id/stop → останавливает → { ok:true, stopped:true }
+
+Где храним данные: %APPDATA%\BrowserVault\profiles.json
+Где сессии: %APPDATA%\BrowserVault\profiles\<id>\
+
+Поведение профилей
+
+Запуск: создаётся/используется папка сессии, открывается окно Chromium (не headless).
+
+Stop: контекст закрывается, окно исчезает, статус в UI обновляется.
+
+Одновременность: sessions — Map в runtime.js, несколько контекстов параллельно.
+
+Отпечатки (MVP): userAgent, locale, timezoneId, viewport, базовые флаги WebRTC.
+План v1.1: Canvas/WebGL/Audio spoof (через preload/extension), списки UA/OS, генератор отпечатков.
+
+Интеграция твоего UI
+
+Твои 3 файла кладём в ui/.
+
+В app.js добавляем тонкий мост (fetch к API) для кнопок Создать/Запустить/Стоп/Удалить.
+
+Никаких «сборок» — Electron грузит готовый HTML.
+
+Автозапуск/управление (без зависонов)
+
+Start.vbs — запускает Electron без консольного окна.
+
+runner.ps1:
+
+... runner.ps1 start — прибьёт наши процессы, поднимет Electron, ждёт /api/health (таймаут), при фейле покажет последние 60 строк логов.
+
+... runner.ps1 stop — чисто остановит.
+
+... runner.ps1 status/logs — проверка и хвост логов.
+
+Правило для ИИ: выполнять только runner.ps1, не изобретать npm run app и пр.
+
+Прокси
+
+Модель: proxy: { server: "http://ip:port", username?, password? }.
+
+Назначение на профиль через форму/редактирование.
+
+Быстрая смена: стоп → смена прокси → запуск.
+
+План: менеджер прокси-пула, автотест доступности/latency, списки, статусы.
+
+Логи и диагностика
+
+Логи Electron → logs/electron.out.log, logs/electron.err.log.
+
+Обычно ловится: порт занят, ESM/CJS несоответствие, нет установленного Chromium для Playwright.
+
+Быстрые фиксы:
+
+npx playwright install chromium
+
+убить порт/процессы через runner
+
+проверить, что "main": "electron-main.cjs" и файл действительно CJS.
+
+Масштаб до 10+ профилей
+
+Параллельные persistent-контексты Playwright.
+
+Ограничение — CPU/RAM/сеть. План: лимиты, очередь запуска, авто-рестарт упавших.
+
+Критерии приёмки (MVP)
+
+Запуск одним ярлыком — окно BrowserVault, server внутри (без отдельной консоли).
+
+/api/health → ok:true, UI показывает список профилей.
+
+Создать профиль → появляется в таблице; Запустить → открывается Chromium, создаётся папка сессии; Стоп → окно закрывается.
+
+Одновременно запущено 10 профилей, у каждого своя папка, прокси, отпечатки.
+
+runner.ps1 start всегда либо даёт «OK: up», либо возвращает логи — без зависаний.
+
+Ошибки типа порт/Chromium отсутствует — корректно диагностируются и чинятся.
+
+Команды (памятка)
+cd C:\AI\BrowserVault
+npm i -E playwright
+npx playwright install chromium
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\runner.ps1" start    # старт
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\runner.ps1" status   # статус
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\runner.ps1" logs     # логи
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\runner.ps1" stop     # стоп
+
+Бэклог (следом за MVP)
+
+«Антидетект»-слой: Canvas/WebGL/Audio/Fonts spoof, списки UA/OS, генератор отпечатков.
+
+Менеджер прокси-пула: импорты, авто-проверка, фильтры по стране/скорости.
+
+Экспорт/импорт профилей (JSON/CSV).
+
+Журнал действий, статистика по профилям.
+
+Пакетирование в BrowserVault.exe (electron-builder).
+
+Поддержка расширений Chromium, автолаунч URL по профилю.
+
+CLI команды (--launch us1, --stop us1) для автоматизаций.
+
+Если нужно — могу прислать готовые блоки кода для:
+
+мостов fetch в твоём app.js (Create/Update/Delete/Launch/Stop),
+
+шаблонов форм для прокси/профиля,
+
+небольшой «плашки статусов» как на макете.
+
+Это всё. Такой документ — «что делаем и что считаем готовым».

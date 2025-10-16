@@ -1,0 +1,34 @@
+<!doctype html><html lang="ru"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>BrowserVault</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<div class="wrap">
+  <aside class="side">
+    <div class="logo">BrowserVault</div>
+    <button id="navProfiles" class="nav active">Профили</button>
+    <button id="navProxies"  class="nav">Прокси</button>
+    <button id="navStats"    class="nav">Статистика</button>
+    <button id="navSettings" class="nav">Настройки</button>
+  </aside>
+  <main class="main">
+    <section id="pageProfiles" class="page active">
+      <div class="toolbar">
+        <button id="btnCreate">+ Создать профиль</button>
+        <span class="spacer"></span>
+        <button id="btnHealth">/api/health</button>
+        <pre id="healthBox"></pre>
+      </div>
+      <table class="grid" id="profilesTbl">
+        <thead><tr>
+          <th>Название</th><th>Статус</th><th>OS</th><th>Прокси</th><th>Действия</th>
+        </tr></thead><tbody></tbody>
+      </table>
+    </section>
+    <section id="pageProxies" class="page"><p>Здесь будет менеджер прокси.</p></section>
+    <section id="pageStats" class="page"><p>Метрики и журнал.</p></section>
+    <section id="pageSettings" class="page"><p>Глобальные настройки.</p></section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body></html>

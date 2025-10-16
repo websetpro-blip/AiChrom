@@ -1,0 +1,38 @@
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: pip in c:\python313\lib\site-packages (25.2)
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: requests==2.32.3 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests[socks]==2.32.3->-r requirements.txt (line 1)) (2.32.3)
+Requirement already satisfied: psutil==6.0.0 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 2)) (6.0.0)
+Requirement already satisfied: ttkbootstrap==1.10.1 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 3)) (1.10.1)
+Requirement already satisfied: pillow==10.4.0 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 4)) (10.4.0)
+Requirement already satisfied: charset-normalizer<4,>=2 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (3.4.3)
+Requirement already satisfied: idna<4,>=2.5 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (3.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (2.5.0)
+Requirement already satisfied: certifi>=2017.4.17 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (2025.8.3)
+Requirement already satisfied: PySocks!=1.5.7,>=1.5.6 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests[socks]==2.32.3->-r requirements.txt (line 1)) (1.7.1)
+250 INFO: PyInstaller: 6.15.0, contrib hooks: 2025.8
+250 INFO: Python: 3.10.6
+257 INFO: Platform: Windows-10-10.0.26220-SP0
+257 INFO: Python environment: C:\Users\webse\AppData\Local\Programs\Python\Python310
+259 INFO: Removing temporary files and cleaning cache in C:\Users\webse\AppData\Local\pyinstaller
+Traceback (most recent call last):
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\Scripts\pyinstaller.exe\__main__.py", line 7, in <module>
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\site-packages\PyInstaller\__main__.py", line 231, in _console_script_run
+    run()
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\site-packages\PyInstaller\__main__.py", line 215, in run
+    run_build(pyi_config, spec_file, **vars(args))
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\site-packages\PyInstaller\__main__.py", line 70, in run_build
+    PyInstaller.building.build_main.main(pyi_config, spec_file, **kwargs)
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\site-packages\PyInstaller\building\build_main.py", line 1282, in main
+    build(specfile, distpath, workpath, clean_build)
+  File "C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\site-packages\PyInstaller\building\build_main.py", line 1220, in build
+    exec(code, spec_namespace)
+  File "AiChrome.spec", line 7, in <module>
+    project_root = Path(__file__).resolve().parent
+NameError: name '__file__' is not defined. Did you mean: '__name__'?
+Done. EXE ╨▓ ╨┐╨░╨┐╨║╨╡ dist\
+Для продолжения нажмите любую клавишу . . .

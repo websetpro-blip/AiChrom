@@ -1,0 +1,126 @@
+Windows PowerShell
+(C) Корпорация Майкрософт (Microsoft Corporation). Все права защищены.
+
+Установите последнюю версию PowerShell для новых функций и улучшения! https://aka.ms/PSWindows
+
+PS C:\AI\AiChrome> cd C:\AI\AiChrome                                                                                    
+PS C:\AI\AiChrome>   py -3 -m pip install --upgrade pip                                                                 
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: pip in c:\python313\lib\site-packages (25.2)
+PS C:\AI\AiChrome>   py -3 -m pip install -r requirements.txt                                                           
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: requests==2.32.3 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests[socks]==2.32.3->-r requirements.txt (line 1)) (2.32.3)
+Requirement already satisfied: psutil==6.0.0 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 2)) (6.0.0)
+Requirement already satisfied: ttkbootstrap==1.10.1 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 3)) (1.10.1)
+Requirement already satisfied: pillow==10.4.0 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 4)) (10.4.0)
+Requirement already satisfied: charset-normalizer<4,>=2 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (3.4.3)
+Requirement already satisfied: idna<4,>=2.5 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (3.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (2.5.0)
+Requirement already satisfied: certifi>=2017.4.17 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (2025.8.3)
+Requirement already satisfied: PySocks!=1.5.7,>=1.5.6 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests[socks]==2.32.3->-r requirements.txt (line 1)) (1.7.1)
+PS C:\AI\AiChrome>   .\build_executable.bat
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: pip in c:\python313\lib\site-packages (25.2)
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: requests==2.32.3 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests[socks]==2.32.3->-r requirements.txt (line 1)) (2.32.3)
+Requirement already satisfied: psutil==6.0.0 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 2)) (6.0.0)
+Requirement already satisfied: ttkbootstrap==1.10.1 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 3)) (1.10.1)
+Requirement already satisfied: pillow==10.4.0 in c:\users\webse\appdata\roaming\python\python313\site-packages (from -r requirements.txt (line 4)) (10.4.0)
+Requirement already satisfied: charset-normalizer<4,>=2 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (3.4.3)
+Requirement already satisfied: idna<4,>=2.5 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (3.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (2.5.0)
+Requirement already satisfied: certifi>=2017.4.17 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests==2.32.3->requests[socks]==2.32.3->-r requirements.txt (line 1)) (2025.8.3)
+Requirement already satisfied: PySocks!=1.5.7,>=1.5.6 in c:\users\webse\appdata\roaming\python\python313\site-packages (from requests[socks]==2.32.3->-r requirements.txt (line 1)) (1.7.1)
+259 INFO: PyInstaller: 6.15.0, contrib hooks: 2025.8
+259 INFO: Python: 3.10.6
+268 INFO: Platform: Windows-10-10.0.26220-SP0
+268 INFO: Python environment: C:\Users\webse\AppData\Local\Programs\Python\Python310
+271 INFO: Removing temporary files and cleaning cache in C:\Users\webse\AppData\Local\pyinstaller
+279 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\Scripts\\pyinstaller.exe',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\python310.zip',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\DLLs',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\win32',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\win32\\lib',
+ 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\Pythonwin',
+ 'C:\\AI\\AiChrome',
+ 'C:\\AI\\AiChrome']
+720 INFO: Appending 'datas' from .spec
+724 INFO: checking Analysis
+724 INFO: Building Analysis because Analysis-00.toc is non existent
+724 INFO: Running Analysis Analysis-00.toc
+724 INFO: Target bytecode optimization level: 0
+724 INFO: Initializing module dependency graph...
+725 INFO: Initializing module graph hook caches...
+742 INFO: Analyzing modules for base_library.zip ...
+1550 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+1589 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+2679 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+3522 INFO: Caching module dependency graph...
+3564 INFO: Looking for Python shared library...
+3570 INFO: Using Python shared library: C:\Users\webse\AppData\Local\Programs\Python\Python310\python310.dll
+3570 INFO: Analyzing C:\AI\AiChrome\multi_browser_manager.py
+3623 INFO: Processing pre-find-module-path hook 'hook-tkinter.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+3624 INFO: TclTkInfo: initializing cached Tcl/Tk info...
+3813 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+3865 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+3881 INFO: Processing standard module hook 'hook-urllib3.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+4000 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+4001 INFO: SetuptoolsInfo: initializing cached setuptools info...
+4598 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+4694 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+4844 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+5582 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+5667 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+6067 INFO: Analyzing hidden import 'pysocks'
+6068 ERROR: Hidden import 'pysocks' not found
+6068 INFO: Analyzing hidden import 'PIL.Image'
+6069 INFO: Processing standard module hook 'hook-PIL.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+6129 INFO: Processing standard module hook 'hook-PIL.Image.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+6498 INFO: Processing standard module hook 'hook-numpy.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+6777 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+7270 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+8254 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+8388 INFO: Processing standard module hook 'hook-PIL.ImageFilter.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+8522 INFO: Analyzing hidden import 'PIL.ImageTk'
+8527 INFO: Processing module hooks (post-graph stage)...
+8707 INFO: Processing standard module hook 'hook-PIL.SpiderImagePlugin.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+8757 INFO: Processing standard module hook 'hook-_tkinter.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks'
+8772 INFO: Performing binary vs. data reclassification (982 entries)
+8873 INFO: Looking for ctypes DLLs
+8883 INFO: Analyzing run-time hooks ...
+8885 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+8887 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+8888 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+8890 INFO: Including run-time hook 'pyi_rth__tkinter.py' from 'C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+8924 INFO: Creating base_library.zip...
+8995 INFO: Looking for dynamic libraries
+9439 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\webse\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\numpy.libs']
+9439 INFO: Extra DLL search directories (PATH): []
+9980 INFO: Warnings written to C:\AI\AiChrome\build\AiChrome\warn-AiChrome.txt
+10047 INFO: Graph cross-reference written to C:\AI\AiChrome\build\AiChrome\xref-AiChrome.html
+10092 INFO: checking PYZ
+10092 INFO: Building PYZ because PYZ-00.toc is non existent
+10092 INFO: Building PYZ (ZlibArchive) C:\AI\AiChrome\build\AiChrome\PYZ-00.pyz
+10898 INFO: Building PYZ (ZlibArchive) C:\AI\AiChrome\build\AiChrome\PYZ-00.pyz completed successfully.
+10933 INFO: checking PKG
+10934 INFO: Building PKG because PKG-00.toc is non existent
+10934 INFO: Building PKG (CArchive) AiChrome.pkg
+16756 INFO: Building PKG (CArchive) AiChrome.pkg completed successfully.
+16780 INFO: Bootloader C:\Users\webse\AppData\Local\Programs\Python\Python310\lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\run.exe
+16780 INFO: checking EXE
+16780 INFO: Building EXE because EXE-00.toc is non existent
+16781 INFO: Building EXE from EXE-00.toc
+16783 INFO: Copying bootloader EXE to C:\AI\AiChrome\dist\AiChrome.exe
+16822 INFO: Copying icon to EXE
+16860 INFO: Copying 0 resources to EXE
+16860 INFO: Embedding manifest in EXE
+16899 INFO: Appending PKG archive to EXE
+17029 INFO: Fixing EXE headers
+19388 INFO: Building EXE from EXE-00.toc completed successfully.
+19431 INFO: checking COLLECT
+19432 INFO: Building COLLECT because COLLECT-00.toc is non existent
+WARNING: The output directory "C:\AI\AiChrome\dist\AiChrome" and ALL ITS CONTENTS will be REMOVED! Continue? (y/N)
