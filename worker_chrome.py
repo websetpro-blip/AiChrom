@@ -1,5 +1,4 @@
 """worker_chrome.py
-
 Universal HTTPS proxy profile implementation (ready-to-use out of the box).
 
 Proxy Configuration:
@@ -20,7 +19,6 @@ Profile Features:
 Usage:
   Simply clone from GitHub and run - everything applies automatically per profile.
 """
-
 from __future__ import annotations
 import subprocess
 import shutil
@@ -35,146 +33,180 @@ log = logging.getLogger(__name__)
 
 # Proxy configuration (ready-to-use)
 PROXY_HOST = "213.139.222.220"
-PROXY_PORT = "9869"
+PROXY_PORT = 9869
 PROXY_USER = "nDRYz5"
 PROXY_PASS = "EP0wPC"
-PROXY_PROTOCOL = "https"
 
-def launch_chrome_with_profile(
-    profile_id: str,
+def detect_worker_chrome() -> Optional[Path]:
+    """
+    Detect Chrome/Chromium executable.
+    Returns Path or None.
+    """
+    if os.name == 'nt':
+        candidates = [
+            Path(os.environ.get('PROGRAMFILES', 'C:\\Program Files')) / 'Google' / 'Chrome' / 'Application' / 'chrome.exe',
+            Path(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)')) / 'Google' / 'Chrome' / 'Application' / 'chrome.exe',
+            Path(os.environ.get('LOCALAPPDATA', '')) / 'Google' / 'Chrome' / 'Application' / 'chrome.exe',
+        ]
+    else:
+        candidates = [
+            Path('/usr/bin/google-chrome'),
+            Path('/usr/bin/chromium-browser'),
+            Path('/usr/bin/chromium'),
+            Path('/snap/bin/chromium'),
+        ]
+    
+    for p in candidates:
+        if p.exists():
+            log.info(f"Detected Chrome at: {p}")
+            return p
+    
+    log.warning("Chrome executable not found")
+    return None
+
+def ensure_worker_chrome() -> Path:
+    """
+    Ensure Chrome is available, raise if not found.
+    """
+    chrome = detect_worker_chrome()
+    if not chrome:
+        raise FileNotFoundError(
+            "Chrome not found. Please install Chrome or Chromium."
+        )
+    return chrome
+
+def launch_chrome(
+    profile_name: str = "default",
+    user_data_dir: Optional[Path] = None,
     user_agent: Optional[str] = None,
     language: str = "en-US",
     timezone: str = "America/New_York",
     screen_width: int = 1920,
     screen_height: int = 1080,
-    extra_flags: Optional[list] = None,
-    use_proxy: bool = True,
-    headless: bool = False
-) -> int:
+    force_pac: bool = False,
+    extra_args: Optional[list] = None,
+) -> subprocess.Popen:
     """
-    Launch Chrome with unique profile and HTTPS proxy.
+    Launch Chrome with HTTPS proxy and profile isolation.
     
     Args:
-        profile_id: Unique profile identifier for full isolation
-        user_agent: Custom user-agent (if None, Chrome default is used)
-        language: Browser language
-        timezone: Timezone for the profile
-        screen_width: Screen width
-        screen_height: Screen height
-        extra_flags: Additional Chrome flags
-        use_proxy: Enable HTTPS proxy (default: True)
-        headless: Run in headless mode
+        profile_name: Profile identifier
+        user_data_dir: Custom user data directory (auto-generated if None)
+        user_agent: Custom user agent string
+        language: Accept-Language header
+        timezone: Timezone override
+        screen_width: Window width
+        screen_height: Window height
+        force_pac: Legacy parameter (ignored, kept for compatibility)
+        extra_args: Additional Chrome arguments
     
     Returns:
-        Process PID
+        subprocess.Popen: Chrome process
     """
+    chrome_exe = ensure_worker_chrome()
     
-    # Unique user-data-dir per profile (strict isolation)
-    user_data_dir = Path.home() / ".aichrome_profiles" / f"profile_{profile_id}"
+    # Auto-generate user_data_dir if not provided
+    if user_data_dir is None:
+        base_dir = Path.cwd() / 'chrome_profiles'
+        base_dir.mkdir(exist_ok=True)
+        user_data_dir = base_dir / profile_name
+    
     user_data_dir.mkdir(parents=True, exist_ok=True)
     
+    # Construct proxy URL with authentication
+    proxy_url = f"https://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    
     args = [
-        "google-chrome",  # or "chromium-browser" depending on system
+        str(chrome_exe),
         f"--user-data-dir={user_data_dir}",
+        f"--proxy-server={proxy_url}",
         f"--window-size={screen_width},{screen_height}",
         f"--lang={language}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-extensions",
-        "--disable-blink-features=AutomationControlled",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--disable-translate",
     ]
     
-    # HTTPS Proxy with authentication
-    if use_proxy:
-        proxy_url = f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
-        args.append(f"--proxy-server={proxy_url}")
-        log.info(f"Profile {profile_id}: Using proxy {PROXY_PROTOCOL}://{PROXY_HOST}:{PROXY_PORT}")
-    
-    # Custom user-agent
     if user_agent:
         args.append(f"--user-agent={user_agent}")
     
-    # Timezone (via environment variable for Chromium)
+    # Timezone override (via environment or arg)
     env = os.environ.copy()
-    env["TZ"] = timezone
+    env['TZ'] = timezone
     
-    # Headless mode
-    if headless:
-        args.extend(["--headless", "--disable-gpu"])
+    if extra_args:
+        args.extend(extra_args)
     
-    # Optional: force software rendering to reduce GPU usage
-    if os.getenv("AICHROME_SOFTGPU", "0") == "1":
-        args.extend([
-            "--disable-gpu",
-            "--disable-gpu-compositing",
-            "--use-gl=swiftshader",
-            "--disable-accelerated-2d-canvas",
-        ])
+    log.info(f"Launching Chrome with profile '{profile_name}' via proxy {PROXY_HOST}:{PROXY_PORT}")
     
-    # Additional flags
-    if extra_flags:
-        args.extend(extra_flags)
-    
-    # Self-test: verify proxy IP and geolocation before launching
-    def _proxy_self_test() -> bool:
-        if not use_proxy:
-            return True
-        try:
-            # Test via proxy
-            proxy_dict = {
-                "http": f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
-                "https": f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
-            }
-            resp = requests.get("https://api.ipify.org?format=json", proxies=proxy_dict, timeout=6)
-            ip = resp.json().get("ip")
-            if not ip:
-                log.warning("Self-test: ipify returned no ip")
-                return False
-            geo = requests.get(
-                f"http://ip-api.com/json/{ip}?fields=status,country,query",
-                proxies=proxy_dict,
-                timeout=6
-            ).json()
-            if geo.get("status") != "success":
-                log.warning("Self-test: ip-api failed for %s", ip)
-                return False
-            log.info("Proxy self-test OK: ip=%s country=%s", geo.get("query"), geo.get("country"))
-            return True
-        except Exception as e:
-            log.exception("Proxy self-test error: %s", e)
-            return False
-    
-    # Run self-test
-    if use_proxy:
-        ok = _proxy_self_test()
-        if not ok:
-            log.warning("Proxy self-test failed — launching anyway but verify proxy manually")
-    
-    log.info(f"Launching Chrome for profile {profile_id}:\n  %s", "\n  ".join(args))
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    
-    def _watch() -> None:
-        try:
-            proc.wait()
-        finally:
-            log.info(f"Chrome process for profile {profile_id} terminated")
-    
-    threading.Thread(target=_watch, daemon=True).start()
-    return proc.pid
-
-
-if __name__ == "__main__":
-    # Example usage: launch with default proxy configuration
-    logging.basicConfig(level=logging.INFO)
-    
-    pid = launch_chrome_with_profile(
-        profile_id="test_profile_001",
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        language="en-US",
-        timezone="America/New_York",
-        use_proxy=True,
-        headless=False
+    proc = subprocess.Popen(
+        args,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     
-    log.info(f"Chrome launched with PID: {pid}")
-    log.info("Profile is fully isolated with unique cookies, storage, and proxy configuration")
+    return proc
+
+def launch_chrome_with_profile(
+    profile_name: str = "default",
+    user_data_dir: Optional[Path] = None,
+    user_agent: Optional[str] = None,
+    language: str = "en-US",
+    timezone: str = "America/New_York",
+    screen_width: int = 1920,
+    screen_height: int = 1080,
+    extra_args: Optional[list] = None,
+) -> subprocess.Popen:
+    """
+    Backward compatibility alias for launch_chrome.
+    """
+    return launch_chrome(
+        profile_name=profile_name,
+        user_data_dir=user_data_dir,
+        user_agent=user_agent,
+        language=language,
+        timezone=timezone,
+        screen_width=screen_width,
+        screen_height=screen_height,
+        force_pac=False,
+        extra_args=extra_args,
+    )
+
+def self_test_proxy():
+    """
+    Test proxy connectivity.
+    """
+    proxy_url = f"https://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    proxies = {
+        'http': proxy_url,
+        'https': proxy_url,
+    }
+    
+    try:
+        log.info("Testing proxy connection...")
+        resp = requests.get('https://api.ipify.org?format=json', proxies=proxies, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            log.info(f"Proxy OK. External IP: {data.get('ip')}")
+            return True
+        else:
+            log.error(f"Proxy test failed with status {resp.status_code}")
+            return False
+    except Exception as e:
+        log.error(f"Proxy test exception: {e}")
+        return False
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
+    
+    # Run self-test
+    if self_test_proxy():
+        log.info("Proxy test passed. Launching Chrome...")
+        proc = launch_chrome(profile_name="test_profile")
+        log.info(f"Chrome launched with PID {proc.pid}")
+        log.info("Chrome will continue running. Close manually when done.")
+    else:
+        log.error("Proxy test failed. Please check proxy configuration.")
