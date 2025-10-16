@@ -26,7 +26,7 @@ import threading
 import os
 import requests
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Callable
 import logging
 
 log = logging.getLogger(__name__)
@@ -64,15 +64,30 @@ def detect_worker_chrome() -> Optional[Path]:
     log.warning("Chrome executable not found")
     return None
 
-def ensure_worker_chrome() -> Path:
+def ensure_worker_chrome(auto: bool = True, ask: Optional[Callable[[str], bool]] = None) -> Path:
     """
     Ensure Chrome is available, raise if not found.
+    
+    Args:
+        auto: If True, automatically use detected Chrome (default)
+        ask: Optional callback function to prompt user for confirmation
+    
+    Returns:
+        Path: Chrome executable path
     """
     chrome = detect_worker_chrome()
     if not chrome:
         raise FileNotFoundError(
             "Chrome not found. Please install Chrome or Chromium."
         )
+    
+    # If ask callback is provided and auto is False, ask user
+    if ask is not None and not auto:
+        if not ask(f"Use Chrome at {chrome}?"):
+            raise FileNotFoundError(
+                "User declined to use detected Chrome."
+            )
+    
     return chrome
 
 def launch_chrome(
