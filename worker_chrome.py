@@ -26,7 +26,7 @@ import threading
 import os
 import requests
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import logging
 
 log = logging.getLogger(__name__)
@@ -76,6 +76,78 @@ def ensure_worker_chrome() -> Path:
     return chrome
 
 def launch_chrome(
+    profile_id: str,
+    user_agent: Optional[str],
+    lang: str,
+    tz: Optional[str],
+    proxy: Optional[object],
+    extra_flags: Optional[List[str]] = None,
+    allow_system_chrome: bool = True,
+    force_pac: bool = False,
+) -> int:
+    """
+    Launch Chrome with HTTPS proxy and profile isolation.
+    
+    Args:
+        profile_id: Profile identifier
+        user_agent: Custom user agent string
+        lang: Accept-Language header (e.g., "en-US")
+        tz: Timezone override (e.g., "America/New_York")
+        proxy: Proxy object (from database/config) - for future use
+        extra_flags: Additional Chrome arguments
+        allow_system_chrome: Whether to allow system Chrome installation
+        force_pac: Legacy parameter (ignored, kept for compatibility)
+    
+    Returns:
+        int: Chrome process PID
+    """
+    chrome_exe = ensure_worker_chrome()
+    
+    # Auto-generate user_data_dir based on profile_id
+    base_dir = Path.cwd() / 'chrome_profiles'
+    base_dir.mkdir(exist_ok=True)
+    user_data_dir = base_dir / profile_id
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Construct proxy URL with authentication
+    proxy_url = f"https://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+    
+    args = [
+        str(chrome_exe),
+        f"--user-data-dir={user_data_dir}",
+        f"--proxy-server={proxy_url}",
+        f"--lang={lang}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--disable-translate",
+    ]
+    
+    if user_agent:
+        args.append(f"--user-agent={user_agent}")
+    
+    # Timezone override (via environment or arg)
+    env = os.environ.copy()
+    if tz:
+        env['TZ'] = tz
+    
+    if extra_flags:
+        args.extend(extra_flags)
+    
+    log.info(f"Launching Chrome with profile '{profile_id}' via proxy {PROXY_HOST}:{PROXY_PORT}")
+    
+    proc = subprocess.Popen(
+        args,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    
+    log.info(f"Chrome launched with PID {proc.pid}")
+    return proc.pid
+
+def launch_chrome_with_profile(
     profile_name: str = "default",
     user_data_dir: Optional[Path] = None,
     user_agent: Optional[str] = None,
@@ -83,25 +155,11 @@ def launch_chrome(
     timezone: str = "America/New_York",
     screen_width: int = 1920,
     screen_height: int = 1080,
-    force_pac: bool = False,
     extra_args: Optional[list] = None,
 ) -> subprocess.Popen:
     """
-    Launch Chrome with HTTPS proxy and profile isolation.
-    
-    Args:
-        profile_name: Profile identifier
-        user_data_dir: Custom user data directory (auto-generated if None)
-        user_agent: Custom user agent string
-        language: Accept-Language header
-        timezone: Timezone override
-        screen_width: Window width
-        screen_height: Window height
-        force_pac: Legacy parameter (ignored, kept for compatibility)
-        extra_args: Additional Chrome arguments
-    
-    Returns:
-        subprocess.Popen: Chrome process
+    Backward compatibility function for direct script usage.
+    Launches Chrome with simplified parameters and returns process object.
     """
     chrome_exe = ensure_worker_chrome()
     
@@ -150,31 +208,6 @@ def launch_chrome(
     
     return proc
 
-def launch_chrome_with_profile(
-    profile_name: str = "default",
-    user_data_dir: Optional[Path] = None,
-    user_agent: Optional[str] = None,
-    language: str = "en-US",
-    timezone: str = "America/New_York",
-    screen_width: int = 1920,
-    screen_height: int = 1080,
-    extra_args: Optional[list] = None,
-) -> subprocess.Popen:
-    """
-    Backward compatibility alias for launch_chrome.
-    """
-    return launch_chrome(
-        profile_name=profile_name,
-        user_data_dir=user_data_dir,
-        user_agent=user_agent,
-        language=language,
-        timezone=timezone,
-        screen_width=screen_width,
-        screen_height=screen_height,
-        force_pac=False,
-        extra_args=extra_args,
-    )
-
 def self_test_proxy():
     """
     Test proxy connectivity.
@@ -205,7 +238,7 @@ if __name__ == '__main__':
     # Run self-test
     if self_test_proxy():
         log.info("Proxy test passed. Launching Chrome...")
-        proc = launch_chrome(profile_name="test_profile")
+        proc = launch_chrome_with_profile(profile_name="test_profile")
         log.info(f"Chrome launched with PID {proc.pid}")
         log.info("Chrome will continue running. Close manually when done.")
     else:
