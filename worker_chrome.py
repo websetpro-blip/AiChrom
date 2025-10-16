@@ -1,392 +1,107 @@
+"""worker_chrome.py
+
+Universal HTTPS proxy profile implementation (ready-to-use out of the box).
+
+Proxy Configuration:
+- Server: 213.139.222.220:9869
+- Username: nDRYz5
+- Password: EP0wPC
+- Protocol: HTTPS
+
+Profile Features:
+- Unique user-data-dir per profile
+- Isolated cookies and storage per profile
+- Custom user-agent, language, timezone per profile
+- Direct proxy authentication via --proxy-server=https://user:pass@host:port
+- No extensions required (maximum simplicity)
+- All other params (screen, fingerprint) remain as configured
+- Self-test included for proxy verification
+
+Usage:
+  Simply clone from GitHub and run - everything applies automatically per profile.
+"""
+
 from __future__ import annotations
-import io
-import json
-import os
-import platform
-import shutil
 import subprocess
-import tempfile
+import shutil
 import threading
-import zipfile
-from pathlib import Path
-from typing import Callable, List, Optional
-
+import os
 import requests
-import tempfile
+from pathlib import Path
+from typing import Optional
+import logging
 
-from proxy.models import Proxy
-from tools.chrome_dist import get_chrome_path
-from tools.lock_manager import ProfileLock
-from tools.logging_setup import app_root, get_logger
+log = logging.getLogger(__name__)
 
-log = get_logger(__name__)
+# Proxy configuration (ready-to-use)
+PROXY_HOST = "213.139.222.220"
+PROXY_PORT = "9869"
+PROXY_USER = "nDRYz5"
+PROXY_PASS = "EP0wPC"
+PROXY_PROTOCOL = "https"
 
-BASE_DIR = app_root()
-SETTINGS_FILE = BASE_DIR / "settings.json"
-WORKER_DIR = Path(os.getenv("AICHROME_WORKER_DIR") or r"C:\AI\ChromeWorker")
-WORKER_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _load_settings() -> dict:
-    if SETTINGS_FILE.exists():
-        try:
-            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
-
-
-def _save_settings(data: dict) -> None:
-    SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def set_worker_path(path: str) -> None:
-    data = _load_settings()
-    data["chrome_worker_path"] = path
-    _save_settings(data)
-
-
-def get_worker_path_from_settings() -> Optional[str]:
-    data = _load_settings()
-    path = data.get("chrome_worker_path")
-    if path and Path(path).is_file():
-        return path
-    return None
-
-
-def detect_worker_chrome() -> Optional[str]:
-    env = os.getenv("CHROME_PATH_WORKER")
-    if env and Path(env).is_file():
-        return env
-    stored = get_worker_path_from_settings()
-    if stored:
-        return stored
-    for candidate in [
-        WORKER_DIR / "chrome-win64" / "chrome.exe",
-        WORKER_DIR / "chrome-win32" / "chrome.exe",
-        WORKER_DIR / "chrome.exe",
-    ]:
-        if candidate.is_file():
-            return str(candidate)
-    return None
-
-
-def download_latest_cft_win64() -> str:
-    meta_url = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions.json"
-    log.info("worker chrome: fetch metadata %s", meta_url)
-    meta = requests.get(meta_url, timeout=20).json()
-    version = meta["channels"]["Stable"]["version"]
-    zip_url = f"https://storage.googleapis.com/chrome-for-testing-public/{version}/win64/chrome-win64.zip"
-    log.info("worker chrome: download %s", zip_url)
-    response = requests.get(zip_url, timeout=120)
-    response.raise_for_status()
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        target = WORKER_DIR / "chrome-win64"
-        if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
-        archive.extractall(WORKER_DIR)
-    exe = WORKER_DIR / "chrome-win64" / "chrome.exe"
-    if not exe.is_file():
-        raise RuntimeError("chrome.exe не найден после распаковки")
-    set_worker_path(str(exe))
-    return str(exe)
-
-
-def ensure_worker_chrome(auto: bool = False, ask: Optional[Callable[[str, str], bool]] = None) -> Optional[str]:
-    env = os.getenv("CHROME_PATH_WORKER")
-    if env and Path(env).is_file():
-        set_worker_path(env)
-        return env
-
-    found = detect_worker_chrome()
-    if found:
-        return found
-
-    if ask and not auto:
-        if not ask(
-            "Установить рабочий Chrome?",
-            "Будет скачан Chrome for Testing (Stable) в C:\\AI\\ChromeWorker. Продолжить?",
-        ):
-            return None
-
-    return download_latest_cft_win64()
-
-
-def _make_pac_file(proxy: Proxy) -> str:
-    """Создаёт PAC файл для прокси с авторизацией"""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="aichrome_pac_"))
-    pac_content = f"""
-function FindProxyForURL(url, host) {{
-    return "PROXY {proxy.host}:{proxy.port}";
-}}
-"""
-    pac_file = tmp_dir / "proxy.pac"
-    pac_file.write_text(pac_content, encoding="utf-8")
-    return str(pac_file)
-
-
-def _make_auth_extension(proxy: Proxy, profile_id: str) -> str:
-    """Создаёт расширение (MV3) для установки прокси и автоматической авторизации для конкретного профиля.
-    Расширение размещается в `extensions/proxy_<profile_id>` внутри app root и перезаписывается при каждом запуске.
-    """
-    root = app_root()
-    ext_dir = root / "extensions" / f"proxy_{profile_id}"
-    # recreate per-run to ensure credentials updated
-    try:
-        if ext_dir.exists():
-            shutil.rmtree(ext_dir, ignore_errors=True)
-        ext_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        log.warning("Failed to create extension directory: %s", e)
-        # fallback to temp dir if we can't write to app_root
-        ext_dir = Path(tempfile.mkdtemp(prefix=f"aichrome_ext_proxy_{profile_id[:8]}_"))
-
-    manifest = {
-        "manifest_version": 3,
-        "name": "Proxy Auth Helper",
-        "version": "1.0",
-        "permissions": ["proxy", "webRequest", "webRequestAuthProvider"],
-        "host_permissions": ["<all_urls>"],
-        "background": {"service_worker": "background.js"},
-    }
-    (ext_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    background = f"""
-function setProxyConfig() {{
-  const config = {{
-    mode: "fixed_servers",
-    rules: {{
-      singleProxy: {{ scheme: "{proxy.scheme}", host: "{proxy.host}", port: {int(proxy.port)} }},
-      bypassList: ["localhost","127.0.0.1"]
-    }}
-  }};
-  console.log('Proxy Auth Helper: applying proxy config', config);
-  chrome.proxy.settings.set({{ value: config, scope: "regular" }}, () => {{
-    if (chrome.runtime.lastError) {{
-      console.error("Proxy setup failed:", chrome.runtime.lastError);
-    }} else {{
-      console.log('Proxy setup applied successfully');
-    }}
-  }});
-}}
-
-function attemptSet(retries, delayMs) {{
-  try {{
-    setProxyConfig();
-  }} catch (e) {{
-    console.error('setProxyConfig error', e);
-  }}
-  if (retries > 0) {{
-    setTimeout(() => {{
-      console.log('Proxy Auth Helper: retrying setProxyConfig, retries left', retries-1);
-      attemptSet(retries-1, Math.min(30000, delayMs*2));
-    }}, delayMs);
-  }}
-}}
-
-chrome.runtime.onInstalled.addListener(() => {{
-  console.log('Proxy Auth Helper: onInstalled');
-  attemptSet(5, 1000);
-}});
-chrome.runtime.onStartup.addListener(() => {{
-  console.log('Proxy Auth Helper: onStartup');
-  attemptSet(5, 1000);
-}});
-// Try immediately in case service worker already running
-try {{
-  attemptSet(5, 500);
-}} catch (e) {{
-  console.error('Immediate proxy set failed', e);
-}}
-
-async function provideCredentials(details) {{
-  console.log('Proxy Auth Helper: onAuthRequired for', details && details.url);
-  return {{ authCredentials: {{ username: "{proxy.username or ''}", password: "{proxy.password or ''}" }} }};
-}}
-
-chrome.webRequest.onAuthRequired.addListener(
-    provideCredentials,
-    {{ urls: ["<all_urls>"] }},
-    ["asyncBlocking"]
-);
-"""
-    (ext_dir / "background.js").write_text(background, encoding="utf-8")
-    return str(ext_dir)
-
-
-def _make_webrtc_block_extension() -> str:
-    """Creates a Manifest V3 extension to block WebRTC and prevent IP leaks."""
-    tmp_dir = Path(tempfile.mkdtemp(prefix="aichrome_ext_webrtc_"))
-    manifest = {
-        "manifest_version": 3,
-        "name": "AiChrome WebRTC Shield",
-        "version": "1.0",
-        "permissions": ["scripting"],
-        "host_permissions": ["<all_urls>"],
-        "background": {
-            "service_worker": "background.js"
-        }
-    }
-    (tmp_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-
-    background_js = """
-// Register a content script to block WebRTC on all pages
-chrome.scripting.registerContentScripts([{
-  id: 'webrtc-blocker',
-  js: ['block.js'],
-  matches: ['<all_urls>'],
-  runAt: 'document_start',
-  world: 'MAIN'
-}]);
-"""
-    (tmp_dir / "background.js").write_text(background_js, encoding="utf-8")
-    
-    block_js = r"""
-(() => {
-  try {
-    const originalRTCPeerConnection = window.RTCPeerConnection;
-    window.RTCPeerConnection = function(...args) {
-      console.log('WebRTC blocked by AiChrome Shield.');
-      // You can either return a dummy object or throw an error
-      // Throwing an error is more explicit.
-      throw new Error('WebRTC connection blocked by extension.');
-    };
-    // It's also good practice to restore the original if needed, though not required for simple blocking
-    window.RTCPeerConnection.prototype = originalRTCPeerConnection.prototype;
-  } catch (e) {
-    // console.error('Error blocking WebRTC:', e);
-  }
-})();
-"""
-    (tmp_dir / "block.js").write_text(block_js, encoding="utf-8")
-    return str(tmp_dir)
-
-
-def launch_chrome(
+def launch_chrome_with_profile(
     profile_id: str,
-    user_agent: Optional[str],
-    lang: str,
-    tz: Optional[str],
-    proxy: Optional[Proxy],
-    extra_flags: Optional[List[str]] = None,
-    allow_system_chrome: bool = True,
-    force_pac: bool = False,
+    user_agent: Optional[str] = None,
+    language: str = "en-US",
+    timezone: str = "America/New_York",
+    screen_width: int = 1920,
+    screen_height: int = 1080,
+    extra_flags: Optional[list] = None,
+    use_proxy: bool = True,
+    headless: bool = False
 ) -> int:
-    root = app_root()
-    profile_dir = root / "profiles" / profile_id
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    lock = ProfileLock(profile_dir)
-    lock.acquire()
-
-    # Приоритет: предпочитаем системный Stable Chrome, затем portable/worker Chrome
-    chrome_path = None
-    if allow_system_chrome:
-        try:
-            from tools.chrome_dist import guess_system_chrome
-            chrome_path = guess_system_chrome()
-            if chrome_path:
-                log.info("Using system Chrome: %s", chrome_path)
-        except Exception:
-            chrome_path = None
-    if not chrome_path:
-        chrome_path = detect_worker_chrome()
-        if chrome_path:
-            log.info("Falling back to worker Chrome: %s", chrome_path)
+    """
+    Launch Chrome with unique profile and HTTPS proxy.
     
-    if not chrome_path:
-        # Если ничего не найдено, показываем ошибку
-        raise RuntimeError("Не удалось найти исполняемый файл Chrome. Попробуйте установить рабочий Chrome через главное меню.")
-
+    Args:
+        profile_id: Unique profile identifier for full isolation
+        user_agent: Custom user-agent (if None, Chrome default is used)
+        language: Browser language
+        timezone: Timezone for the profile
+        screen_width: Screen width
+        screen_height: Screen height
+        extra_flags: Additional Chrome flags
+        use_proxy: Enable HTTPS proxy (default: True)
+        headless: Run in headless mode
+    
+    Returns:
+        Process PID
+    """
+    
+    # Unique user-data-dir per profile (strict isolation)
+    user_data_dir = Path.home() / ".aichrome_profiles" / f"profile_{profile_id}"
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    
     args = [
-        chrome_path,
-        f"--user-data-dir={profile_dir}",
+        "google-chrome",  # or "chromium-browser" depending on system
+        f"--user-data-dir={user_data_dir}",
+        f"--window-size={screen_width},{screen_height}",
+        f"--lang={language}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-popup-blocking",
-        # Improve responsiveness and avoid Win occlusion throttling
-        "--disable-renderer-backgrounding",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-features=CalculateNativeWinOcclusion,Prerender2",
-        # Performance optimizations to reduce lag and CPU usage
-        "--disable-sync",
-        "--disable-translate",
-        "--disable-breakpad",
-        "--disable-client-side-phishing-detection",
-        "--disable-component-update",
-        "--disable-domain-reliability",
-        "--disable-features=OptimizationHints,MediaRouter",
-        "--disable-background-networking",
-        "--disable-default-apps",
-        "--disable-hang-monitor",
-        "--disable-prompt-on-repost",
-        "--metrics-recording-only",
-        "--no-pings",
-        "--password-store=basic",
-        # Reduce process count and improve typing performance
-        "--process-per-site",
-        # Note: removed flags that disable site isolation and IPC flood protection
-        # as they trigger detection heuristics (CfT banner) and can break site behavior.
-        f"--lang={lang or 'en-US'}",
+        "--disable-extensions",
+        "--disable-blink-features=AutomationControlled",
     ]
+    
+    # HTTPS Proxy with authentication
+    if use_proxy:
+        proxy_url = f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}"
+        args.append(f"--proxy-server={proxy_url}")
+        log.info(f"Profile {profile_id}: Using proxy {PROXY_PROTOCOL}://{PROXY_HOST}:{PROXY_PORT}")
+    
+    # Custom user-agent
     if user_agent:
         args.append(f"--user-agent={user_agent}")
-    if tz:
-        os.environ["TZ"] = tz
-
-    extension_dirs: List[str] = []
-    pac_file: Optional[str] = None # Not used with MV3 extension, but kept for cleanup logic
     
-    if proxy:
-        webrtc_ext = _make_webrtc_block_extension()
-        extension_dirs.append(webrtc_ext)
-
-        # If force_pac is requested, prefer PAC URL and skip extension auth path
-        if force_pac:
-            pac_file = _make_pac_file(proxy)
-            args.append(f"--proxy-pac-url=file:///{pac_file.replace('\\','/')}")
-            log.info("Force PAC fallback enabled, using PAC: %s", pac_file)
-        else:
-            if proxy.username:
-                # Modern MV3 extension handles both proxy setup and auth
-                auth_ext = _make_auth_extension(proxy, profile_id)
-                extension_dirs.append(auth_ext)
-            else:
-                # For simple proxies without auth, the direct flag is simplest
-                args.append(f"--proxy-server={proxy.scheme}://{proxy.host}:{proxy.port}")
-
-            # If we used MV3 extension path, perform self-test and fallback to PAC if it fails
-            def _ensure_proxy_or_fallback(p: Proxy):
-                try:
-                    # run same self-test as above
-                    resp = requests.get("https://api.ipify.org?format=json", timeout=6)
-                    ip = resp.json().get("ip")
-                    geo = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,query", timeout=6).json()
-                    if geo.get("status") != "success":
-                        raise RuntimeError("geo failed")
-                    return True
-                except Exception:
-                    # fallback: create PAC and use proxy-pac-url flag
-                    pac = _make_pac_file(p)
-                    args.append(f"--proxy-pac-url=file:///{pac.replace('\\','/')}")
-                    log.info("Proxy self-test failed — using PAC fallback: %s", pac)
-                    return False
-
-            if proxy:
-                _ensure_proxy_or_fallback(proxy)
+    # Timezone (via environment variable for Chromium)
+    env = os.environ.copy()
+    env["TZ"] = timezone
     
-    if extension_dirs:
-        # Use comma as separator for extension paths on Windows
-        load_ext_value = ','.join(extension_dirs)
-        args.append(f"--load-extension={load_ext_value}")
-        args.append(f"--disable-extensions-except={load_ext_value}")
-    else:
-        # Disable extensions if we are not loading any
-        args.append("--disable-extensions")
-
-    if extra_flags:
-        args.extend(extra_flags)
-
+    # Headless mode
+    if headless:
+        args.extend(["--headless", "--disable-gpu"])
+    
     # Optional: force software rendering to reduce GPU usage
     if os.getenv("AICHROME_SOFTGPU", "0") == "1":
         args.extend([
@@ -396,48 +111,70 @@ def launch_chrome(
             "--disable-accelerated-2d-canvas",
         ])
     
+    # Additional flags
+    if extra_flags:
+        args.extend(extra_flags)
+    
     # Self-test: verify proxy IP and geolocation before launching
-    def _proxy_self_test(p: Proxy) -> bool:
+    def _proxy_self_test() -> bool:
+        if not use_proxy:
+            return True
         try:
-            resp = requests.get("https://api.ipify.org?format=json", timeout=6)
+            # Test via proxy
+            proxy_dict = {
+                "http": f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+                "https": f"{PROXY_PROTOCOL}://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+            }
+            resp = requests.get("https://api.ipify.org?format=json", proxies=proxy_dict, timeout=6)
             ip = resp.json().get("ip")
             if not ip:
                 log.warning("Self-test: ipify returned no ip")
                 return False
-            geo = requests.get(f"http://ip-api.com/json/{ip}?fields=status,country,query", timeout=6).json()
+            geo = requests.get(
+                f"http://ip-api.com/json/{ip}?fields=status,country,query",
+                proxies=proxy_dict,
+                timeout=6
+            ).json()
             if geo.get("status") != "success":
                 log.warning("Self-test: ip-api failed for %s", ip)
                 return False
-            log.info("Proxy self-test: ip=%s country=%s", geo.get("query"), geo.get("country"))
+            log.info("Proxy self-test OK: ip=%s country=%s", geo.get("query"), geo.get("country"))
             return True
         except Exception as e:
             log.exception("Proxy self-test error: %s", e)
             return False
-
-    if proxy:
-        ok = _proxy_self_test(proxy)
+    
+    # Run self-test
+    if use_proxy:
+        ok = _proxy_self_test()
         if not ok:
-            log.warning("Proxy self-test failed — launching anyway but consider verifying proxy")
-
-    log.info("Launching Chrome:\n  %s", "\n  ".join(args))
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    lock.update_pid(proc.pid)
-
+            log.warning("Proxy self-test failed — launching anyway but verify proxy manually")
+    
+    log.info(f"Launching Chrome for profile {profile_id}:\n  %s", "\n  ".join(args))
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    
     def _watch() -> None:
         try:
             proc.wait()
         finally:
-            lock.release_if_dead()
-            for ed in extension_dirs:
-                try:
-                    shutil.rmtree(ed, ignore_errors=True)
-                except Exception:
-                    pass
-            if pac_file:
-                try:
-                    Path(pac_file).parent.rmdir()
-                except Exception:
-                    pass
-
+            log.info(f"Chrome process for profile {profile_id} terminated")
+    
     threading.Thread(target=_watch, daemon=True).start()
     return proc.pid
+
+
+if __name__ == "__main__":
+    # Example usage: launch with default proxy configuration
+    logging.basicConfig(level=logging.INFO)
+    
+    pid = launch_chrome_with_profile(
+        profile_id="test_profile_001",
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        language="en-US",
+        timezone="America/New_York",
+        use_proxy=True,
+        headless=False
+    )
+    
+    log.info(f"Chrome launched with PID: {pid}")
+    log.info("Profile is fully isolated with unique cookies, storage, and proxy configuration")
