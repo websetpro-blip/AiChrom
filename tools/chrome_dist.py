@@ -1,57 +1,78 @@
 from __future__ import annotations
-import os, platform, shutil, subprocess, sys
+import os
+import platform
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
+
 from tools.logging_setup import app_root, get_logger
 
 log = get_logger()
 
+
 def _which(names: list[str]) -> Optional[str]:
-    for n in names:
-        p = shutil.which(n)
-        if p:
-            return p
+    for name in names:
+        path = shutil.which(name)
+        if path:
+            return path
     return None
+
 
 def guess_system_chrome() -> Optional[str]:
     system = platform.system()
     if system == "Windows":
-        # Популярные пути и App Paths
         candidates = [
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
         ]
-        for c in candidates:
-            if Path(c).is_file():
-                return c
-        # Fallback — PATH
+        for candidate in candidates:
+            if Path(candidate).is_file():
+                return candidate
         return _which(["chrome.exe", "google-chrome"])
-    elif system == "Darwin":
-        c = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        return c if Path(c).is_file() else _which(["google-chrome", "chrome"])
-    else:
-        return _which(["google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "chrome"])
+    if system == "Darwin":
+        candidate = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        return candidate if Path(candidate).is_file() else _which(["google-chrome", "chrome"])
+    return _which(["google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "chrome"])
+
 
 def get_chrome_path(allow_system: bool = True) -> str:
-    # Portable Chrome, если положен в tools/chrome/*
-    ar = app_root()
-    candidates = []
+    """
+    Resolve Chrome binary with priority on production/system builds.
+    Set env AICHROME_PREFER_SYSTEM=0 to prefer portable folder first.
+    """
+    prefer_system = os.getenv("AICHROME_PREFER_SYSTEM", "1") != "0"
+    root = app_root()
+
+    if allow_system and prefer_system:
+        system_chrome = guess_system_chrome()
+        if system_chrome:
+            log.info("Using system Chrome: %s", system_chrome)
+            return system_chrome
+
+    portable_candidates: list[Path] = []
     if platform.system() == "Windows":
-        candidates += [
-            ar / "tools" / "chrome" / "chrome-win" / "chrome.exe",
-            ar / "tools" / "chrome" / "chrome.exe",
-        ]
+        portable_candidates.extend(
+            [
+                root / "tools" / "chrome" / "chrome-win" / "chrome.exe",
+                root / "tools" / "chrome" / "chrome.exe",
+            ]
+        )
     else:
-        candidates += [
-            ar / "tools" / "chrome" / "chrome",
-        ]
-    for c in candidates:
-        if c.is_file():
-            log.info(f"Using portable Chrome: {c}")
-            return str(c)
-    if allow_system:
-        sys_chrome = guess_system_chrome()
-        if sys_chrome:
-            log.info(f"Using system Chrome: {sys_chrome}")
-            return sys_chrome
-    raise FileNotFoundError("Chrome binary not found. Put portable Chrome into tools/chrome/ or enable allow_system.")
+        portable_candidates.append(root / "tools" / "chrome" / "chrome")
+
+    for candidate in portable_candidates:
+        if candidate.is_file():
+            log.info("Using portable Chrome: %s", candidate)
+            return str(candidate)
+
+    if allow_system and not prefer_system:
+        system_chrome = guess_system_chrome()
+        if system_chrome:
+            log.info("Using system Chrome: %s", system_chrome)
+            return system_chrome
+
+    raise FileNotFoundError(
+        "Chrome binary not found. Install Chrome or place a portable build into tools/chrome/."
+    )
