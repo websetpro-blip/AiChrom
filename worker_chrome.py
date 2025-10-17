@@ -55,7 +55,7 @@ def _resolve_chrome_binary(profile: dict, chrome_path: str = None) -> str:
 
     # 2) chrome_path из профиля
     p = (profile or {}).get("chrome_path")
-    if p and Path(p).is_file():
+    if p and p.strip() and Path(p).is_file():
         log.info("Using Chrome from profile: %s", p)
         return p
 
