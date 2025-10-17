@@ -5,7 +5,7 @@ import os
 import sys
 import random
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, filedialog
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +67,7 @@ class Profile:
     proxy_country: Optional[str] = None
     screen_width: int = 1920
     screen_height: int = 1080
+    chrome_path: str = ""
     status: str = "offline"
     tags: str = ""
     os_name: str = "Windows"
@@ -270,6 +271,25 @@ class ProfileDialog:
         ttk.Label(lf_profile, text="Теги:").grid(row=5, column=0, sticky="w", pady=2)
         self.tags_var = tk.StringVar()
         ttk.Entry(lf_profile, textvariable=self.tags_var).grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
+
+        ttk.Label(lf_profile, text="Браузер (exe):").grid(row=6, column=0, sticky="w", pady=2)
+        self.chrome_path_var = tk.StringVar()
+        chrome_frame = ttk.Frame(lf_profile)
+        chrome_frame.grid(row=6, column=1, sticky="ew", pady=2, padx=(6, 0))
+        chrome_frame.columnconfigure(0, weight=1)
+        
+        chrome_entry = ttk.Entry(chrome_frame, textvariable=self.chrome_path_var)
+        chrome_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        
+        def _pick_chrome():
+            path = filedialog.askopenfilename(
+                title="Укажи chrome.exe",
+                filetypes=[("Chrome", "chrome.exe"), ("Все файлы", "*.*")]
+            )
+            if path:
+                self.chrome_path_var.set(path)
+        
+        ttk.Button(chrome_frame, text="Обзор", command=_pick_chrome).grid(row=0, column=1)
 
         # Пресет/флаги
         lf_preset = ttk.LabelFrame(main_tab, text="Geo/Language preset", padding=10)
@@ -501,6 +521,7 @@ class ProfileDialog:
                 self.profile.timezone = self.tz_var.get().strip()
                 self.profile.screen_width = int(self.screen_width_var.get() or "1920")
                 self.profile.screen_height = int(self.screen_height_var.get() or "1080")
+                self.profile.chrome_path = self.chrome_path_var.get().strip()
                 self.profile.proxy_scheme = self.proxy_type_var.get()
                 self.profile.proxy_country = self.country_var.get().strip()
                 self.profile.proxy_host = self.host_var.get().strip()
@@ -527,6 +548,7 @@ class ProfileDialog:
                     force_webrtc_proxy=bool(self.webrtc_var.get()),
                     screen_width=int(self.screen_width_var.get() or "1920"),
                     screen_height=int(self.screen_height_var.get() or "1080"),
+                    chrome_path=self.chrome_path_var.get().strip(),
                     proxy_scheme=self.proxy_type_var.get(),
                     proxy_country=self.country_var.get().strip(),
                     proxy_host=self.host_var.get().strip(),
@@ -571,6 +593,7 @@ class ProfileDialog:
             self.password_var.set(profile.proxy_password)
         self.screen_width_var.set(str(profile.screen_width))
         self.screen_height_var.set(str(profile.screen_height))
+        self.chrome_path_var.set(profile.chrome_path or "")
         self.os_var.set(profile.os_name or "Windows")
         self.tags_var.set(profile.tags or "")
         if hasattr(self, "_preset_key"):
@@ -1095,6 +1118,8 @@ class BrowserManagerApp:
                 preset=profile.preset,
                 apply_cdp_overrides=profile.apply_cdp_overrides,
                 force_webrtc_proxy=profile.force_webrtc_proxy,
+                profile=asdict(profile),
+                chrome_path=profile.chrome_path,
             )
         except Exception as exc:
             log.error("Failed to launch Chrome: %s", exc)

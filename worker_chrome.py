@@ -40,6 +40,33 @@ except ImportError:
 ROOT = app_root()
 log = get_logger(__name__)
 
+
+def _resolve_chrome_binary(profile: dict, chrome_path: str = None) -> str:
+    """
+    Порядок выбора Chrome бинаря:
+    1) chrome_path из аргумента (если задан и файл существует)
+    2) profile["chrome_path"] (если существует файл)
+    3) (fallback) get_chrome_path() - системный Chrome
+    """
+    # 1) chrome_path из аргумента
+    if chrome_path and Path(chrome_path).is_file():
+        log.info("Using Chrome from argument: %s", chrome_path)
+        return chrome_path
+
+    # 2) chrome_path из профиля
+    p = (profile or {}).get("chrome_path")
+    if p and Path(p).is_file():
+        log.info("Using Chrome from profile: %s", p)
+        return p
+
+    # 3) fallback - системный Chrome
+    try:
+        c = get_chrome_path(allow_system=True)
+        log.info("Using fallback system Chrome: %s", c)
+        return c
+    except FileNotFoundError:
+        raise RuntimeError("Chrome binary not found. Укажи 'Браузер (exe)' в профиле.")
+
 # Функции блокировки профилей
 def _user_data_dir_for(profile_id: str) -> Path:
     return Path("profiles") / str(profile_id)
@@ -408,6 +435,8 @@ def launch_chrome(
     force_pac: bool = False,
     preset: str = "none",
     apply_cdp_overrides: bool = True,
+    profile: dict = None,
+    chrome_path: str = None,
     force_webrtc_proxy: bool = True,
 ) -> int:
     """
@@ -437,8 +466,8 @@ def launch_chrome(
             pass
 
     # выбираем один браузер, без двойных попыток
-    chrome_path = _resolve_chrome_path(allow_system_chrome)
-    if not chrome_path:
+    chrome_binary = _resolve_chrome_binary(profile or {}, chrome_path)
+    if not chrome_binary:
         _release_profile_lock(user_data_dir)
         raise RuntimeError("Chrome not found")
 
@@ -458,7 +487,7 @@ def launch_chrome(
         debug_port = _pick_free_port()
 
         args = [
-            chrome_path,
+            chrome_binary,
             f"--user-data-dir={user_data_dir}",
             f"--remote-debugging-port={debug_port}",
             f"--remote-allow-origins=*",
