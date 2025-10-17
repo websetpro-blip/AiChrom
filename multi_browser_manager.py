@@ -236,14 +236,18 @@ class ProfileDialog:
 
         ttk.Label(lf_profile, text="Название:").grid(row=0, column=0, sticky="w", pady=2)
         self.name_var = tk.StringVar()
-        ttk.Entry(lf_profile, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", pady=2, padx=(6, 0))
+        name_entry = ttk.Entry(lf_profile, textvariable=self.name_var)
+        name_entry.grid(row=0, column=1, sticky="ew", pady=2, padx=(6, 0))
+        self._attach_context_menu(name_entry)
 
         ttk.Label(lf_profile, text="User-Agent:").grid(row=1, column=0, sticky="w", pady=2)
         self.ua_var = tk.StringVar()
         ua_frame = ttk.Frame(lf_profile)
         ua_frame.grid(row=1, column=1, sticky="ew", pady=2, padx=(6, 0))
         ua_frame.columnconfigure(0, weight=1)
-        ttk.Entry(ua_frame, textvariable=self.ua_var).grid(row=0, column=0, sticky="ew")
+        ua_entry = ttk.Entry(ua_frame, textvariable=self.ua_var)
+        ua_entry.grid(row=0, column=0, sticky="ew")
+        self._attach_context_menu(ua_entry)
         ttk.Button(ua_frame, text="Случайный", command=self.generate_random_ua).grid(row=0, column=1, padx=(6, 0))
 
         ttk.Label(lf_profile, text="Язык:").grid(row=2, column=0, sticky="w", pady=2)
@@ -253,7 +257,9 @@ class ProfileDialog:
         lang_frame = ttk.Frame(lf_profile)
         lang_frame.grid(row=2, column=1, sticky="ew", pady=2, padx=(6, 0))
         lang_frame.columnconfigure(0, weight=1)
-        ttk.Entry(lang_frame, textvariable=self.lang_var).grid(row=0, column=0, sticky="ew")
+        lang_entry = ttk.Entry(lang_frame, textvariable=self.lang_var)
+        lang_entry.grid(row=0, column=0, sticky="ew")
+        self._attach_context_menu(lang_entry)
         ttk.Button(lang_frame, text="Случайный", command=self._random_accept_lang).grid(row=0, column=1, padx=(6, 0))
 
         ttk.Label(lf_profile, text="Часовой пояс:").grid(row=3, column=0, sticky="w", pady=2)
@@ -261,7 +267,9 @@ class ProfileDialog:
         tz_frame = ttk.Frame(lf_profile)
         tz_frame.grid(row=3, column=1, sticky="ew", pady=2, padx=(6, 0))
         tz_frame.columnconfigure(0, weight=1)
-        ttk.Entry(tz_frame, textvariable=self.tz_var).grid(row=0, column=0, sticky="ew")
+        tz_entry = ttk.Entry(tz_frame, textvariable=self.tz_var)
+        tz_entry.grid(row=0, column=0, sticky="ew")
+        self._attach_context_menu(tz_entry)
         ttk.Button(tz_frame, text="Случайный", command=self._random_timezone).grid(row=0, column=1, padx=(6, 0))
 
         ttk.Label(lf_profile, text="ОС:").grid(row=4, column=0, sticky="w", pady=2)
@@ -270,7 +278,9 @@ class ProfileDialog:
 
         ttk.Label(lf_profile, text="Теги:").grid(row=5, column=0, sticky="w", pady=2)
         self.tags_var = tk.StringVar()
-        ttk.Entry(lf_profile, textvariable=self.tags_var).grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
+        tags_entry = ttk.Entry(lf_profile, textvariable=self.tags_var)
+        tags_entry.grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
+        self._attach_context_menu(tags_entry)
 
         ttk.Label(lf_profile, text="Браузер (exe):").grid(row=6, column=0, sticky="w", pady=2)
         self.chrome_path_var = tk.StringVar()
@@ -280,6 +290,7 @@ class ProfileDialog:
         
         chrome_entry = ttk.Entry(chrome_frame, textvariable=self.chrome_path_var)
         chrome_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._attach_context_menu(chrome_entry)
         
         def _pick_chrome():
             path = filedialog.askopenfilename(
@@ -338,19 +349,29 @@ class ProfileDialog:
                      values=["http","https","socks5","socks4"], state="readonly", width=12).grid(row=0, column=1, sticky="w", pady=2, padx=(6, 0))
 
         ttk.Label(lf_proxy, text="Страна:").grid(row=1, column=0, sticky="w", pady=2)
-        ttk.Entry(lf_proxy, textvariable=self.country_var, width=8).grid(row=1, column=1, sticky="w", pady=2, padx=(6, 0))
+        country_entry = ttk.Entry(lf_proxy, textvariable=self.country_var, width=8)
+        country_entry.grid(row=1, column=1, sticky="w", pady=2, padx=(6, 0))
+        self._attach_context_menu(country_entry)
 
         ttk.Label(lf_proxy, text="Хост:").grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Entry(lf_proxy, textvariable=self.host_var).grid(row=2, column=1, sticky="ew", pady=2, padx=(6, 0))
+        host_entry = ttk.Entry(lf_proxy, textvariable=self.host_var)
+        host_entry.grid(row=2, column=1, sticky="ew", pady=2, padx=(6, 0))
+        self._attach_context_menu(host_entry)
 
         ttk.Label(lf_proxy, text="Порт:").grid(row=3, column=0, sticky="w", pady=2)
-        ttk.Entry(lf_proxy, textvariable=self.port_var, width=10).grid(row=3, column=1, sticky="w", pady=2, padx=(6, 0))
+        port_entry = ttk.Entry(lf_proxy, textvariable=self.port_var, width=10)
+        port_entry.grid(row=3, column=1, sticky="w", pady=2, padx=(6, 0))
+        self._attach_context_menu(port_entry)
 
         ttk.Label(lf_proxy, text="Логин:").grid(row=4, column=0, sticky="w", pady=2)
-        ttk.Entry(lf_proxy, textvariable=self.login_var).grid(row=4, column=1, sticky="ew", pady=2, padx=(6, 0))
+        login_entry = ttk.Entry(lf_proxy, textvariable=self.login_var)
+        login_entry.grid(row=4, column=1, sticky="ew", pady=2, padx=(6, 0))
+        self._attach_context_menu(login_entry)
 
         ttk.Label(lf_proxy, text="Пароль:").grid(row=5, column=0, sticky="w", pady=2)
-        ttk.Entry(lf_proxy, textvariable=self.password_var, show="*").grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
+        password_entry = ttk.Entry(lf_proxy, textvariable=self.password_var, show="*")
+        password_entry.grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
+        self._attach_context_menu(password_entry)
 
         # Кнопки действий прокси
         actions_frame = ttk.Frame(proxy_tab)
@@ -372,9 +393,13 @@ class ProfileDialog:
         # Алиасы для совместимости с новым кодом
         self.width_var = self.screen_width_var
         self.height_var = self.screen_height_var
-        ttk.Entry(lf_fp, width=8, textvariable=self.width_var).grid(row=0, column=1, sticky="w", padx=(6, 0), pady=2)
+        width_entry = ttk.Entry(lf_fp, width=8, textvariable=self.width_var)
+        width_entry.grid(row=0, column=1, sticky="w", padx=(6, 0), pady=2)
+        self._attach_context_menu(width_entry)
         ttk.Label(lf_fp, text="×").grid(row=0, column=2, padx=4, pady=2)
-        ttk.Entry(lf_fp, width=8, textvariable=self.height_var).grid(row=0, column=3, sticky="w", pady=2)
+        height_entry = ttk.Entry(lf_fp, width=8, textvariable=self.height_var)
+        height_entry.grid(row=0, column=3, sticky="w", pady=2)
+        self._attach_context_menu(height_entry)
         ttk.Button(lf_fp, text="Случайное", command=self.generate_random_resolution).grid(row=0, column=4, padx=(8, 0), pady=2)
 
         # --------- ВКЛАДКА 4: PROXY LAB ----------
