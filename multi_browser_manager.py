@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 import uuid
+import psutil
 
 try:
     import ttkbootstrap as tb
@@ -162,6 +163,25 @@ class ProfileStore:
             messagebox.showerror("AiChrome", f"Не удалось сохранить профили: {exc}")
 
 
+class _ScrollFrame(ttk.Frame):
+    """Прокручиваемый контейнер для форм"""
+    def __init__(self, parent):
+        super().__init__(parent)
+        canvas = tk.Canvas(self, highlightthickness=0)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self.inner = ttk.Frame(canvas)
+
+        canvas.create_window((0,0), window=self.inner, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        def _on_inner_config(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self.inner.bind("<Configure>", _on_inner_config)
+
+
 class ProfileDialog:
     def __init__(self, master: tk.Misc, profile: Optional[Profile] = None):
         self.master = master
@@ -170,9 +190,9 @@ class ProfileDialog:
 
         self.top = tk.Toplevel(master)
         self.top.title("AiChrome — профиль")
-        self.top.geometry("800x700")
-        self.top.minsize(700, 600)
-        self.top.maxsize(1000, 800)
+        self.top.geometry("900x800")
+        self.top.minsize(800, 700)
+        self.top.maxsize(1200, 900)
         self.top.transient(master)
         self.top.grab_set()
         self.top.resizable(True, True)
@@ -186,22 +206,9 @@ class ProfileDialog:
             pass
 
         # Создаем прокручиваемый контейнер
-        canvas = tk.Canvas(self.top)
-        scrollbar = ttk.Scrollbar(self.top, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-        
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        
-        container = ttk.Frame(scrollable_frame, padding=12)
+        wrap = _ScrollFrame(self.top)
+        wrap.pack(fill="both", expand=True)
+        container = ttk.Frame(wrap.inner, padding=12)
         container.pack(fill="both", expand=True)
 
         self._build_form(container)
@@ -209,124 +216,94 @@ class ProfileDialog:
         if profile is None:
             self.generate_random_profile()
 
-        btn_frame = ttk.Frame(container)
-        btn_frame.pack(fill="x", pady=(12, 0))
-        ttk.Button(btn_frame, text="Отмена", command=self.top.destroy).pack(side="right")
-        ttk.Button(btn_frame, text="ОК", command=self._on_ok).pack(side="right", padx=(0, 8))
-
         self.top.protocol("WM_DELETE_WINDOW", self.top.destroy)
         self.top.wait_window()
 
     def _build_form(self, parent: ttk.Frame) -> None:
-        main = ttk.LabelFrame(parent, text="Профиль", padding=10)
-        main.pack(fill="x")
+        # ====== Создаем вкладки как в Dolphin Browser ======
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill="both", expand=True, padx=8, pady=8)
 
-        ttk.Label(main, text="Название:").grid(row=0, column=0, sticky="w")
+        # --------- ВКЛАДКА 1: ОСНОВНЫЕ ----------
+        main_tab = ttk.Frame(notebook)
+        notebook.add(main_tab, text="Основные")
+        
+        # Профиль
+        lf_profile = ttk.LabelFrame(main_tab, text="Профиль", padding=10)
+        lf_profile.pack(fill="x", pady=(0, 10))
+        lf_profile.columnconfigure(1, weight=1)
+
+        ttk.Label(lf_profile, text="Название:").grid(row=0, column=0, sticky="w", pady=2)
         self.name_var = tk.StringVar()
-        _name_entry = ttk.Entry(main, textvariable=self.name_var, width=40)
-        _name_entry.grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        self._attach_context_menu(_name_entry)
+        ttk.Entry(lf_profile, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", pady=2, padx=(6, 0))
 
-        ttk.Label(main, text="User-Agent:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(lf_profile, text="User-Agent:").grid(row=1, column=0, sticky="w", pady=2)
         self.ua_var = tk.StringVar()
-        ua_row = ttk.Frame(main)
-        ua_row.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        _ua_entry = ttk.Entry(ua_row, textvariable=self.ua_var)
-        _ua_entry.pack(side="left", fill="x", expand=True)
-        self._attach_context_menu(_ua_entry)
-        ttk.Button(ua_row, text="Случайный", command=self.generate_random_ua).pack(side="left", padx=(6, 0))
+        ua_frame = ttk.Frame(lf_profile)
+        ua_frame.grid(row=1, column=1, sticky="ew", pady=2, padx=(6, 0))
+        ua_frame.columnconfigure(0, weight=1)
+        ttk.Entry(ua_frame, textvariable=self.ua_var).grid(row=0, column=0, sticky="ew")
+        ttk.Button(ua_frame, text="Случайный", command=self.generate_random_ua).grid(row=0, column=1, padx=(6, 0))
 
-        ttk.Label(main, text="Язык (Accept-Language):").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(lf_profile, text="Язык:").grid(row=2, column=0, sticky="w", pady=2)
         self.lang_var = tk.StringVar(value="en-US")
-        lang_row = ttk.Frame(main)
-        lang_row.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        _lang_entry = ttk.Entry(lang_row, textvariable=self.lang_var)
-        _lang_entry.pack(side="left", fill="x", expand=True)
-        self._attach_context_menu(_lang_entry)
-        ttk.Button(lang_row, text="Случайный", command=self.generate_random_language).pack(side="left", padx=(6, 0))
+        # Алиас для совместимости с новым кодом
+        self.accept_lang_var = self.lang_var
+        lang_frame = ttk.Frame(lf_profile)
+        lang_frame.grid(row=2, column=1, sticky="ew", pady=2, padx=(6, 0))
+        lang_frame.columnconfigure(0, weight=1)
+        ttk.Entry(lang_frame, textvariable=self.lang_var).grid(row=0, column=0, sticky="ew")
+        ttk.Button(lang_frame, text="Случайный", command=self._random_accept_lang).grid(row=0, column=1, padx=(6, 0))
 
-        ttk.Label(main, text="Часовой пояс (TZ):").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(lf_profile, text="Часовой пояс:").grid(row=3, column=0, sticky="w", pady=2)
         self.tz_var = tk.StringVar(value="UTC")
-        tz_row = ttk.Frame(main)
-        tz_row.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        _tz_entry = ttk.Entry(tz_row, textvariable=self.tz_var)
-        _tz_entry.pack(side="left", fill="x", expand=True)
-        self._attach_context_menu(_tz_entry)
-        ttk.Button(tz_row, text="Случайный", command=self.generate_random_timezone).pack(side="left", padx=(6, 0))
+        tz_frame = ttk.Frame(lf_profile)
+        tz_frame.grid(row=3, column=1, sticky="ew", pady=2, padx=(6, 0))
+        tz_frame.columnconfigure(0, weight=1)
+        ttk.Entry(tz_frame, textvariable=self.tz_var).grid(row=0, column=0, sticky="ew")
+        ttk.Button(tz_frame, text="Случайный", command=self._random_timezone).grid(row=0, column=1, padx=(6, 0))
 
-        presets_frame = ttk.LabelFrame(parent, text="Geo/Language preset", padding=10)
-        presets_frame.pack(fill="x", pady=(12, 0))
+        ttk.Label(lf_profile, text="ОС:").grid(row=4, column=0, sticky="w", pady=2)
+        self.os_var = tk.StringVar(value="Windows")
+        ttk.Combobox(lf_profile, textvariable=self.os_var, values=["Windows","macOS","Linux"], state="readonly", width=15).grid(row=4, column=1, sticky="w", pady=2, padx=(6, 0))
+
+        ttk.Label(lf_profile, text="Теги:").grid(row=5, column=0, sticky="w", pady=2)
+        self.tags_var = tk.StringVar()
+        ttk.Entry(lf_profile, textvariable=self.tags_var).grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
+
+        # Пресет/флаги
+        lf_preset = ttk.LabelFrame(main_tab, text="Geo/Language preset", padding=10)
+        lf_preset.pack(fill="x", pady=(0, 10))
+        lf_preset.columnconfigure(1, weight=1)
+
+        ttk.Label(lf_preset, text="Preset:").grid(row=0, column=0, sticky="w", pady=2)
         initial_preset_key = (self.profile.preset if self.profile else "none") or "none"
         if initial_preset_key not in GEO_PRESETS:
             initial_preset_key = "none"
         self._preset_key = initial_preset_key
         initial_label = PRESET_LABEL_BY_KEY.get(initial_preset_key, PRESET_LABEL_LIST[0])
         self.preset_label_var = tk.StringVar(value=initial_label)
-        ttk.Label(presets_frame, text="Preset:").grid(row=0, column=0, sticky="w")
-        self.preset_cb = ttk.Combobox(
-            presets_frame,
-            textvariable=self.preset_label_var,
-            values=PRESET_LABEL_LIST,
-            state="readonly",
-        )
-        self.preset_cb.grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        presets_frame.columnconfigure(1, weight=1)
-
-        self.cdp_var = tk.BooleanVar(
-            value=self.profile.apply_cdp_overrides if self.profile else True
-        )
-        ttk.Checkbutton(
-            presets_frame,
-            text="Apply UA/language/TZ/geo via CDP",
-            variable=self.cdp_var,
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-
-        self.webrtc_var = tk.BooleanVar(
-            value=self.profile.force_webrtc_proxy if self.profile else True
-        )
-        ttk.Checkbutton(
-            presets_frame,
-            text="WebRTC via proxy only (no UDP)",
-            variable=self.webrtc_var,
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 4))
-
+        # Алиас для совместимости с новым кодом
+        self.preset_var = self.preset_label_var
+        self._preset_keys = PRESET_LABEL_LIST
+        self.preset_cb = ttk.Combobox(lf_preset, textvariable=self.preset_var,
+                                      values=self._preset_keys, state="readonly")
+        self.preset_cb.grid(row=0, column=1, sticky="ew", pady=2, padx=(6, 0))
         self.preset_cb.bind("<<ComboboxSelected>>", self._on_preset_selected)
-        self._set_preset(initial_preset_key, apply_fields=False)
 
-        ttk.Label(main, text="Операционная система:").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        self.os_var = tk.StringVar(value="Windows")
-        ttk.Combobox(
-            main,
-            textvariable=self.os_var,
-            values=("Windows", "macOS", "Linux"),
-            state="readonly",
-        ).grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+        self.cdp_var = tk.BooleanVar(value=True if getattr(self.profile, "apply_cdp_overrides", True) else True)
+        self.webrtc_var = tk.BooleanVar(value=True if getattr(self.profile, "force_webrtc_proxy", True) else True)
 
-        ttk.Label(main, text="Теги:").grid(row=5, column=0, sticky="w", pady=(6, 0))
-        self.tags_var = tk.StringVar()
-        _tags_entry = ttk.Entry(main, textvariable=self.tags_var)
-        _tags_entry.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        self._attach_context_menu(_tags_entry)
+        ttk.Checkbutton(lf_preset, text="Apply UA/language/TZ/geo via CDP", variable=self.cdp_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Checkbutton(lf_preset, text="WebRTC via proxy only (no UDP)", variable=self.webrtc_var).grid(row=2, column=0, columnspan=2, sticky="w", pady=2)
 
-        display = ttk.LabelFrame(parent, text="Отпечаток", padding=10)
-        display.pack(fill="x", pady=(12, 0))
-        ttk.Label(display, text="Разрешение:").grid(row=0, column=0, sticky="w")
-        self.screen_width_var = tk.StringVar(value="1920")
-        self.screen_height_var = tk.StringVar(value="1080")
-        res_row = ttk.Frame(display)
-        res_row.grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        _sw_entry = ttk.Entry(res_row, textvariable=self.screen_width_var, width=8)
-        _sw_entry.pack(side="left")
-        self._attach_context_menu(_sw_entry)
-        ttk.Label(res_row, text="Г-").pack(side="left", padx=4)
-        _sh_entry = ttk.Entry(res_row, textvariable=self.screen_height_var, width=8)
-        _sh_entry.pack(side="left")
-        self._attach_context_menu(_sh_entry)
-        ttk.Button(res_row, text="Случайное", command=self.generate_random_resolution).pack(side="left", padx=(6, 0))
+        # --------- ВКЛАДКА 2: ПРОКСИ ----------
+        proxy_tab = ttk.Frame(notebook)
+        notebook.add(proxy_tab, text="Прокси")
 
-        # ---------- ПРОКСИ ----------
-        proxy_frame = ttk.LabelFrame(parent, text="Прокси")
-        proxy_frame.pack(fill="x", padx=8, pady=(10, 6))
+        lf_proxy = ttk.LabelFrame(proxy_tab, text="Настройки прокси", padding=10)
+        lf_proxy.pack(fill="x", pady=(0, 10))
+        lf_proxy.columnconfigure(1, weight=1)
 
         # переменные, чтобы пресеты и сохранение не падали
         self.proxy_type_var = tk.StringVar(value="http")
@@ -336,60 +313,74 @@ class ProfileDialog:
         self.login_var = tk.StringVar()
         self.password_var = tk.StringVar()
 
-        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
-        ttk.Label(row, text="Тип (http/https/socks5/socks4):", width=28).pack(side="left")
-        ttk.Combobox(row, textvariable=self.proxy_type_var, state="readonly",
-                     values=["http","https","socks5","socks4"], width=12).pack(side="left", padx=(6,0))
+        ttk.Label(lf_proxy, text="Тип:").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Combobox(lf_proxy, textvariable=self.proxy_type_var,
+                     values=["http","https","socks5","socks4"], state="readonly", width=12).grid(row=0, column=1, sticky="w", pady=2, padx=(6, 0))
 
-        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
-        ttk.Label(row, text="Страна (ISO):", width=28).pack(side="left")
-        ttk.Entry(row, textvariable=self.country_var, width=8).pack(side="left", padx=(6,0))
+        ttk.Label(lf_proxy, text="Страна:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Entry(lf_proxy, textvariable=self.country_var, width=8).grid(row=1, column=1, sticky="w", pady=2, padx=(6, 0))
 
-        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
-        ttk.Label(row, text="Хост:", width=28).pack(side="left")
-        ttk.Entry(row, textvariable=self.host_var, width=28).pack(side="left", padx=(6,0))
+        ttk.Label(lf_proxy, text="Хост:").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Entry(lf_proxy, textvariable=self.host_var).grid(row=2, column=1, sticky="ew", pady=2, padx=(6, 0))
 
-        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
-        ttk.Label(row, text="Порт:", width=28).pack(side="left")
-        ttk.Entry(row, textvariable=self.port_var, width=10).pack(side="left", padx=(6,0))
+        ttk.Label(lf_proxy, text="Порт:").grid(row=3, column=0, sticky="w", pady=2)
+        ttk.Entry(lf_proxy, textvariable=self.port_var, width=10).grid(row=3, column=1, sticky="w", pady=2, padx=(6, 0))
 
-        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
-        ttk.Label(row, text="Логин:", width=28).pack(side="left")
-        ttk.Entry(row, textvariable=self.login_var, width=24).pack(side="left", padx=(6,0))
+        ttk.Label(lf_proxy, text="Логин:").grid(row=4, column=0, sticky="w", pady=2)
+        ttk.Entry(lf_proxy, textvariable=self.login_var).grid(row=4, column=1, sticky="ew", pady=2, padx=(6, 0))
 
-        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
-        ttk.Label(row, text="Пароль:", width=28).pack(side="left")
-        ttk.Entry(row, textvariable=self.password_var, show="*", width=24).pack(side="left", padx=(6,0))
+        ttk.Label(lf_proxy, text="Пароль:").grid(row=5, column=0, sticky="w", pady=2)
+        ttk.Entry(lf_proxy, textvariable=self.password_var, show="*").grid(row=5, column=1, sticky="ew", pady=2, padx=(6, 0))
 
-        notebook = ttk.Notebook(parent)
-        notebook.pack(fill="x", pady=(12, 0))
+        # Кнопки действий прокси
+        actions_frame = ttk.Frame(proxy_tab)
+        actions_frame.pack(fill="x", pady=(0, 10))
+        ttk.Button(actions_frame, text="🔧 Автопрокси", command=self._lab_auto_best).pack(side="left")
+        ttk.Button(actions_frame, text="⏭ Следующий", command=self._lab_auto_next).pack(side="left", padx=(6, 0))
 
-        proxy_tab = ttk.Frame(notebook)
-        notebook.add(proxy_tab, text="Прокси")
+        # --------- ВКЛАДКА 3: ОТПЕЧАТОК ----------
+        fingerprint_tab = ttk.Frame(notebook)
+        notebook.add(fingerprint_tab, text="Отпечаток")
 
-        # Прокси поля теперь в основном блоке выше
+        lf_fp = ttk.LabelFrame(fingerprint_tab, text="Настройки отпечатка", padding=10)
+        lf_fp.pack(fill="x", pady=(0, 10))
+        lf_fp.columnconfigure(3, weight=1)
+        
+        ttk.Label(lf_fp, text="Разрешение:").grid(row=0, column=0, sticky="w", pady=2)
+        self.screen_width_var = tk.StringVar(value="1920")
+        self.screen_height_var = tk.StringVar(value="1080")
+        # Алиасы для совместимости с новым кодом
+        self.width_var = self.screen_width_var
+        self.height_var = self.screen_height_var
+        ttk.Entry(lf_fp, width=8, textvariable=self.width_var).grid(row=0, column=1, sticky="w", padx=(6, 0), pady=2)
+        ttk.Label(lf_fp, text="×").grid(row=0, column=2, padx=4, pady=2)
+        ttk.Entry(lf_fp, width=8, textvariable=self.height_var).grid(row=0, column=3, sticky="w", pady=2)
+        ttk.Button(lf_fp, text="Случайное", command=self.generate_random_resolution).grid(row=0, column=4, padx=(8, 0), pady=2)
 
-        # Пароль теперь в основном блоке прокси выше
-
-        proxy_tab.columnconfigure(1, weight=1)
-        main.columnconfigure(1, weight=1)
-
-        actions = ttk.Frame(proxy_tab)
-        actions.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Button(actions, text="🔧 Автопрокси", command=self._lab_auto_best).grid(row=0, column=0, sticky="w")
-        ttk.Button(actions, text="⏭ Следующий", command=self._lab_auto_next).grid(row=0, column=1, sticky="w", padx=(6, 0))
-
+        # --------- ВКЛАДКА 4: PROXY LAB ----------
         lab_tab = ttk.Frame(notebook)
         notebook.add(lab_tab, text="Proxy Lab")
+
+        lf_lab = ttk.LabelFrame(lab_tab, text="Proxy Lab", padding=10)
+        lf_lab.pack(fill="both", expand=True)
+        
         self.lab_frame = ProxyLabFrame(
-            lab_tab,
+            lf_lab,
             apply_callback=self._apply_proxy_from_lab,
             scheme_getter=lambda: self.proxy_type_var.get(),
             country_getter=lambda: self.country_var.get(),
         )
-        self.lab_frame.pack(fill="x", padx=6, pady=6)
+        self.lab_frame.pack(fill="both", expand=True)
 
-        ttk.Button(parent, text="🎲 Случайные настройки", command=self.generate_random_profile).pack(fill="x", padx=6, pady=(8, 0))
+        # Низ окна — кнопки
+        actions = ttk.Frame(parent)
+        actions.pack(fill="x", pady=(8, 0))
+        actions.columnconfigure(0, weight=1)
+        ttk.Button(actions, text="ОК", command=self._on_ok).pack(side="right", padx=4)
+        ttk.Button(actions, text="Отмена", command=self._on_cancel).pack(side="right")
+
+        # Инициализация пресетов
+        self._set_preset(initial_preset_key, apply_fields=False)
 
         def _sync_lab(*_):
             self.lab_frame.sync_with_parent(self.proxy_type_var.get(), self.country_var.get())
@@ -556,6 +547,10 @@ class ProfileDialog:
         except Exception as e:
             messagebox.showerror("AiChrome", f"Ошибка сохранения: {e}")
 
+    def _on_cancel(self) -> None:
+        """Отменяет изменения и закрывает окно"""
+        self.top.destroy()
+
     def _populate_fields(self, profile: Optional[Profile]) -> None:
         if not profile:
             return
@@ -703,6 +698,31 @@ class ProfileDialog:
         self.screen_width_var.set(str(w))
         self.screen_height_var.set(str(h))
 
+    def _random_accept_lang(self) -> None:
+        """Генерирует случайный Accept-Language"""
+        import random
+        langs = [
+            "en-US,en;q=0.9",
+            "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
+            "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+            "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+            "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+            "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
+            "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7"
+        ]
+        self.lang_var.set(random.choice(langs))
+
+    def _random_timezone(self) -> None:
+        """Генерирует случайный часовой пояс"""
+        import random
+        timezones = [
+            "UTC", "America/New_York", "America/Los_Angeles", "Europe/London",
+            "Europe/Paris", "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai",
+            "Asia/Almaty", "Europe/Moscow", "Australia/Sydney", "America/Chicago"
+        ]
+        self.tz_var.set(random.choice(timezones))
+
     def apply_kazakhstan_preset(self) -> None:
         self._set_preset("kz_almaty", apply_fields=True)
 
@@ -736,6 +756,7 @@ class BrowserManagerApp:
         self.store = ProfileStore(PROFILES_PATH)
         self.profiles: List[Profile] = self.store.load()
         self.pool = ProxyPool()
+        self.running = {}  # profile_id -> pid
 
         self.status_var = tk.StringVar(value="Готово")
 
@@ -1015,7 +1036,29 @@ class BrowserManagerApp:
         if not profile:
             messagebox.showwarning("AiChrome", "Выберите профиль")
             return
+        
+        # Проверяем, не запущен ли уже профиль
+        if profile.status == "running":
+            messagebox.showwarning("AiChrome", f"Профиль '{profile.name}' уже запущен")
+            return
+            
+        # Проверяем по карте живых процессов
+        pid = self.running.get(profile.id)
+        if pid and psutil.pid_exists(pid):
+            log.info(f"[ui] profile {profile.id} already running pid={pid}")
+            messagebox.showwarning("AiChrome", f"Профиль '{profile.name}' уже запущен (PID: {pid})")
+            return
+            
+        # Блокируем повторный запуск
+        if hasattr(self, '_launching') and self._launching:
+            messagebox.showwarning("AiChrome", "Запуск уже выполняется, подождите...")
+            return
+        self._launching = True
         proxy = profile.to_proxy()
+        log.info("Profile proxy data: scheme=%s host=%s port=%s username=%s password=%s", 
+                profile.proxy_scheme, profile.proxy_host, profile.proxy_port, 
+                profile.proxy_username, "***" if profile.proxy_password else None)
+        log.info("Created proxy object: %s", proxy)
         info: Optional[ValidationResult] = None
         source = "manual"
         if not proxy:
@@ -1056,6 +1099,7 @@ class BrowserManagerApp:
         except Exception as exc:
             log.error("Failed to launch Chrome: %s", exc)
             messagebox.showerror("AiChrome", f"Не удалось запустить Chrome: {exc}")
+            self._launching = False
             return
         details = f"PID {pid}"
         if proxy:
@@ -1063,9 +1107,11 @@ class BrowserManagerApp:
         profile.status = "running"
         profile.last_used = datetime.utcnow().isoformat()
         profile.touch()
+        self.running[profile.id] = pid  # Добавляем в карту процессов
         self._save_profiles()
         self.status_var.set(f"Chrome запущен: {details}")
         messagebox.showinfo("AiChrome", f"Chrome запущен\n{details}")
+        self._launching = False
 
     def _autoproxy_for_profile(self, profile: Profile) -> Tuple[Proxy, str, Optional[ValidationResult]]:
         sticky = self.pool.get_sticky(profile.id)

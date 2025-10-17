@@ -1,0 +1,141 @@
+Ок, разобрал. По стэку видно 2 прямых косяка в UI и третье — пропали поля прокси, из-за этого ломаются пресеты.
+
+Что ломается прямо сейчас
+
+В ProfileDialog._build_form(...) висит кнопка «Случайное» для разрешения, но в классе нет метода generate_random_resolution → падает AttributeError.
+
+В ProfileDialog._set_preset(...) выставляется self.country_var, но переменной нет (пропали виджеты блока «Прокси»), поэтому снова AttributeError.
+
+Поля «Прокси» (тип/хост/порт/логин/пароль/страна) вырезаны из формы → профиль сохраняется без proxy{...} и воркеру нечего запускать.
+
+Ниже даю готовый патч для multi_browser_manager.py (добавляет недостающий метод, возвращает блок «Прокси», определяет все *_var, сохраняет их в профиль). Вставляй как есть.
+
+Патч для multi_browser_manager.py
+1) Внутри класса ProfileDialog — добавь метод «случайное разрешение»
+def generate_random_resolution(self):
+    # Набор «человеческих» разрешений
+    import random
+    pool = [
+        (1366, 768), (1440, 900), (1536, 864),
+        (1600, 900), (1920, 1080), (1920, 1200),
+        (2560, 1440), (2560, 1600), (2880, 1800),
+        (3440, 1440)
+    ]
+    w, h = random.choice(pool)
+    self.width_var.set(str(w))
+    self.height_var.set(str(h))
+
+2) В __init__/_build_form(...) — верни и свяжи блок «Прокси»
+
+(если его нет — вставь этот фрагмент туда, где создаёшь остальные секции формы)
+
+# ---------- ПРОКСИ ----------
+proxy_frame = ttk.LabelFrame(container, text="Прокси")
+proxy_frame.pack(fill="x", padx=8, pady=(10, 6))
+
+# переменные, чтобы пресеты и сохранение не падали
+self.proxy_type_var = tk.StringVar(value=profile.get("proxy", {}).get("type", "http"))
+self.country_var    = tk.StringVar(value=profile.get("country_iso", ""))  # для пресетов
+self.host_var       = tk.StringVar(value=profile.get("proxy", {}).get("host", ""))
+self.port_var       = tk.StringVar(value=str(profile.get("proxy", {}).get("port", "")))
+self.login_var      = tk.StringVar(value=profile.get("proxy", {}).get("login", ""))
+self.password_var   = tk.StringVar(value=profile.get("proxy", {}).get("password", ""))
+
+row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+ttk.Label(row, text="Тип (http/https/socks5/socks4):", width=28).pack(side="left")
+ttk.Combobox(row, textvariable=self.proxy_type_var, state="readonly",
+             values=["http","https","socks5","socks4"], width=12).pack(side="left", padx=(6,0))
+
+row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+ttk.Label(row, text="Страна (ISO):", width=28).pack(side="left")
+ttk.Entry(row, textvariable=self.country_var, width=8).pack(side="left", padx=(6,0))
+
+row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+ttk.Label(row, text="Хост:", width=28).pack(side="left")
+ttk.Entry(row, textvariable=self.host_var, width=28).pack(side="left", padx=(6,0))
+
+row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+ttk.Label(row, text="Порт:", width=28).pack(side="left")
+ttk.Entry(row, textvariable=self.port_var, width=10).pack(side="left", padx=(6,0))
+
+row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+ttk.Label(row, text="Логин:", width=28).pack(side="left")
+ttk.Entry(row, textvariable=self.login_var, width=24).pack(side="left", padx=(6,0))
+
+row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+ttk.Label(row, text="Пароль:", width=28).pack(side="left")
+ttk.Entry(row, textvariable=self.password_var, show="*", width=24).pack(side="left", padx=(6,0))
+
+3) В обработчике «Сохранить» (там, где собираешь profile из *_var) — гарантируй, что всё уходит в JSON
+profile["accept_language"] = self.accept_lang_var.get().strip()
+profile["timezone"]        = self.tz_var.get().strip()
+profile["country_iso"]     = self.country_var.get().strip().upper()  # нужно пресетам
+
+# экран
+profile["screen_width"]    = int(self.width_var.get() or 1920)
+profile["screen_height"]   = int(self.height_var.get() or 1080)
+
+# флаги из чекбоксов (если у тебя они есть)
+profile["apply_cdp_overrides"] = bool(self.cdp_var.get()) if hasattr(self, "cdp_var") else True
+profile["force_webrtc_proxy"]  = bool(self.webrtc_var.get()) if hasattr(self, "webrtc_var") else True
+
+# сам прокси-блок
+profile["proxy"] = {
+    "type"    : self.proxy_type_var.get().lower() or "http",
+    "host"    : self.host_var.get().strip(),
+    "port"    : int(self.port_var.get() or 0),
+    "login"   : self.login_var.get().strip(),
+    "password": self.password_var.get(),
+}
+
+4) В методе пресетов _set_preset(...) — он больше не упадёт
+
+Оставь логику как есть, но теперь self.country_var определён. На KZ пресете можешь ставить сразу:
+
+if preset_key.startswith("KZ"):
+    self.country_var.set("KZ")
+    self.tz_var.set("Asia/Almaty")
+    self.accept_lang_var.set("ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7")
+
+5) В строке с кнопкой «Случайное» для разрешения — вызов теперь валиден
+ttk.Button(res_row, text="Случайное", command=self.generate_random_resolution).pack(side="left", padx=(6, 0))
+
+Где теперь всё находится и как это стыкуется с запуском
+
+UI (ProfileDialog) пишет в profile поля:
+
+accept_language, timezone, country_iso,
+
+screen_width, screen_height,
+
+apply_cdp_overrides, force_webrtc_proxy,
+
+proxy: {type, host, port, login, password}.
+
+worker_chrome.py должен читать ровно такие ключи.
+Если в нём ждёшь profile["proxy"]["type"/"host"/..."] — работать будет сразу.
+Если имена другие — либо подправь воркер, либо на сохранении сделай маппинг.
+
+В твоём воркере уже есть pproxy-обёртка и CDP-оверрайды. Когда из UI снова начнут приходить корректные profile["proxy"] и флаги — запуск пойдёт без диалогов логина, с нормальным Chrome-отпечатком.
+
+Почему «пропали» старые настройки прокси
+
+Их просто удалили/урезали при последнем редизайне формы (отсюда и обращение к country_var без объявления). Патч выше возвращает секцию «Прокси» и переменные, которые ожидают пресеты и воркер.
+
+Быстрый чек-лист после патча
+
+Открой «Редактировать профиль» → введи реальные прокси.
+
+Сохрани → запусти.
+
+В браузере проверь:
+
+https://api.ipify.org?format=json → внешний IP = прокси.
+
+https://user-agent-client-hints.glitch.me/ → бренды Chromium / Google Chrome согласованы с UA.
+
+Консоль: Intl.DateTimeFormat().resolvedOptions().timeZone → Asia/Almaty.
+
+browserleaks.com/webrtc → нет UDP вне прокси.
+
+Если после этого где-то ещё падает — кидай новую трассировку строкой. Я поправлю точечно (но вот эти два AttributeError и отсутствующий блок прокси мы сейчас закрыли).

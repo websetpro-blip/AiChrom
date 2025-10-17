@@ -1,0 +1,183 @@
+Окей, делаем «компактный режим» — все поля в одном окне, без прокрутки (или с авто-скроллом, если окно низкое). Ниже — готовый патч для multi_browser_manager.py, который:
+
+раскладывает форму в две колонки с grid (левая — профиль/отпечаток, правая — прокси/пресет/флаги),
+
+добавляет отсутствующий метод «Случайное» для разрешения,
+
+оставляет те же StringVar/поля, что у тебя уже есть (включая country_var, proxy_*_var, accept_lang_var, tz_var и т.д.),
+
+при нехватке места включает скролл-контейнер (Canvas+Frame).
+
+Почему так
+
+В Tk хорошо делать компактные формы через grid: 2 колонки, columnconfigure(weight=1), sticky="ew", единые отступы — получается плотная сетка без лишних зазоров. 
+TkDocs
+
+Если окно по высоте маловато, стандартный паттерн — ScrollFrame: Canvas + Frame + Scrollbar, куда кладём форму целиком (скролл только когда нужен). 
+RIP Tutorial
++1
+
+Патч (вставляй как есть)
+
+Ниже 3 вставки: метод случайного разрешения, компактная сборка формы и (опционально) ScrollFrame.
+
+1) Добавь в класс ProfileDialog (если ещё нет) — «Случайное» для разрешения
+def generate_random_resolution(self):
+    import random
+    pool = [
+        (1366, 768), (1440, 900), (1536, 864),
+        (1600, 900), (1920, 1080), (1920, 1200),
+        (2560, 1440), (2560, 1600), (2880, 1800),
+        (3440, 1440)
+    ]
+    w, h = random.choice(pool)
+    self.width_var.set(str(w))
+    self.height_var.set(str(h))
+
+2) Замените ваш _build_form на компактную сетку (две колонки)
+def _build_form(self, parent):
+    # ====== Контейнер: одна форма, две колонки ======
+    form = ttk.Frame(parent, padding=(8, 8, 8, 8))
+    form.grid(row=0, column=0, sticky="nsew")
+    form.columnconfigure(0, weight=1, uniform="col")
+    form.columnconfigure(1, weight=1, uniform="col")
+
+    # --------- ЛЕВАЯ КОЛОНКА (профиль + отпечаток) ----------
+    left = ttk.Frame(form)
+    left.grid(row=0, column=0, sticky="nsew", padx=(0,8))
+
+    # Профиль
+    lf_profile = ttk.LabelFrame(left, text="Профиль")
+    lf_profile.grid(row=0, column=0, sticky="nsew", pady=(0,6))
+    lf_profile.columnconfigure(1, weight=1)
+
+    ttk.Label(lf_profile, text="Название:").grid(row=0, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_profile, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", pady=2)
+
+    ttk.Label(lf_profile, text="User-Agent:").grid(row=1, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_profile, textvariable=self.ua_var).grid(row=1, column=1, sticky="ew", pady=2)
+    ttk.Button(lf_profile, text="Случайный", command=self.generate_random_profile).grid(row=1, column=2, padx=(6,0))
+
+    ttk.Label(lf_profile, text="Язык (Accept-Language):").grid(row=2, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_profile, textvariable=self.accept_lang_var).grid(row=2, column=1, sticky="ew", pady=2)
+    ttk.Button(lf_profile, text="Случайный", command=self._random_accept_lang).grid(row=2, column=2, padx=(6,0))
+
+    ttk.Label(lf_profile, text="Часовой пояс (TZ):").grid(row=3, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_profile, textvariable=self.tz_var).grid(row=3, column=1, sticky="ew", pady=2)
+    ttk.Button(lf_profile, text="Случайный", command=self._random_timezone).grid(row=3, column=2, padx=(6,0))
+
+    ttk.Label(lf_profile, text="ОС:").grid(row=4, column=0, sticky="w", pady=2)
+    ttk.Combobox(lf_profile, textvariable=self.os_var, values=["Windows","macOS","Linux"], state="readonly", width=12).grid(row=4, column=1, sticky="w", pady=2)
+
+    ttk.Label(lf_profile, text="Теги:").grid(row=5, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_profile, textvariable=self.tags_var).grid(row=5, column=1, sticky="ew", pady=2)
+
+    # Пресет/флаги
+    lf_preset = ttk.LabelFrame(left, text="Geo/Language preset")
+    lf_preset.grid(row=1, column=0, sticky="nsew", pady=(6,6))
+    lf_preset.columnconfigure(1, weight=1)
+
+    ttk.Label(lf_preset, text="Preset:").grid(row=0, column=0, sticky="w", pady=2)
+    self.preset_cb = ttk.Combobox(lf_preset, textvariable=self.preset_var,
+                                  values=self._preset_keys, state="readonly")
+    self.preset_cb.grid(row=0, column=1, sticky="ew", pady=2)
+    self.preset_cb.bind("<<ComboboxSelected>>", self._on_preset_selected)
+
+    self.cdp_var = tk.BooleanVar(value=True if getattr(self.profile, "apply_cdp_overrides", True) else True)
+    self.webrtc_var = tk.BooleanVar(value=True if getattr(self.profile, "force_webrtc_proxy", True) else True)
+
+    ttk.Checkbutton(lf_preset, text="Apply UA/language/TZ/geo via CDP", variable=self.cdp_var).grid(row=1, column=0, columnspan=2, sticky="w")
+    ttk.Checkbutton(lf_preset, text="WebRTC via proxy only (no UDP)", variable=self.webrtc_var).grid(row=2, column=0, columnspan=2, sticky="w")
+
+    # Отпечаток (разрешение)
+    lf_fp = ttk.LabelFrame(left, text="Отпечаток")
+    lf_fp.grid(row=2, column=0, sticky="nsew")
+    lf_fp.columnconfigure(3, weight=1)
+    ttk.Label(lf_fp, text="Разрешение:").grid(row=0, column=0, sticky="w")
+    ttk.Entry(lf_fp, width=6, textvariable=self.width_var).grid(row=0, column=1, sticky="w", padx=(6,0))
+    ttk.Label(lf_fp, text="×").grid(row=0, column=2, padx=4)
+    ttk.Entry(lf_fp, width=6, textvariable=self.height_var).grid(row=0, column=3, sticky="w")
+    ttk.Button(lf_fp, text="Случайное", command=self.generate_random_resolution).grid(row=0, column=4, padx=(8,0))
+
+    # --------- ПРАВАЯ КОЛОНКА (прокси) ----------
+    right = ttk.Frame(form)
+    right.grid(row=0, column=1, sticky="nsew", padx=(8,0))
+
+    lf_proxy = ttk.LabelFrame(right, text="Прокси")
+    lf_proxy.grid(row=0, column=0, sticky="nsew")
+    for c in range(2):
+        lf_proxy.columnconfigure(c, weight=1)
+
+    ttk.Label(lf_proxy, text="Тип (http/https/socks5/socks4):").grid(row=0, column=0, sticky="w", pady=2)
+    ttk.Combobox(lf_proxy, textvariable=self.proxy_type_var,
+                 values=["http","https","socks5","socks4"], state="readonly", width=10).grid(row=0, column=1, sticky="w", pady=2)
+
+    ttk.Label(lf_proxy, text="Страна (ISO):").grid(row=1, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_proxy, textvariable=self.country_var, width=6).grid(row=1, column=1, sticky="w", pady=2)
+
+    ttk.Label(lf_proxy, text="Хост:").grid(row=2, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_proxy, textvariable=self.host_var).grid(row=2, column=1, sticky="ew", pady=2)
+
+    ttk.Label(lf_proxy, text="Порт:").grid(row=3, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_proxy, textvariable=self.port_var, width=8).grid(row=3, column=1, sticky="w", pady=2)
+
+    ttk.Label(lf_proxy, text="Логин:").grid(row=4, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_proxy, textvariable=self.login_var).grid(row=4, column=1, sticky="ew", pady=2)
+
+    ttk.Label(lf_proxy, text="Пароль:").grid(row=5, column=0, sticky="w", pady=2)
+    ttk.Entry(lf_proxy, textvariable=self.password_var, show="*").grid(row=5, column=1, sticky="ew", pady=2)
+
+    # Низ окна — кнопки
+    actions = ttk.Frame(parent)
+    actions.grid(row=1, column=0, sticky="ew", pady=(8,0))
+    actions.columnconfigure(0, weight=1)
+    ttk.Button(actions, text="ОК", command=self._on_ok).pack(side="right", padx=4)
+    ttk.Button(actions, text="Отмена", command=self._on_cancel).pack(side="right")
+
+
+Важно: этот код использует те же *_var, что ты уже создал (мы их не переименовывали), поэтому пресеты и сохранение продолжат работать.
+
+3) (Опционально) Авто-скролл, если окно мало по высоте
+
+Если список полей может становиться длинным — оберни форму в скролл-контейнер:
+
+class _ScrollFrame(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        canvas = tk.Canvas(self, highlightthickness=0)
+        vsb = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        self.inner = ttk.Frame(canvas)
+
+        canvas.create_window((0,0), window=self.inner, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        def _on_inner_config(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        self.inner.bind("<Configure>", _on_inner_config)
+
+# и в __init__/build:
+wrap = _ScrollFrame(self.root)
+wrap.pack(fill="both", expand=True)
+self._build_form(wrap.inner)  # кладём форму внутрь
+
+
+Это ровно тот паттерн Canvas+Frame из док/примеров. 
+RIP Tutorial
+
+Что ты получишь
+
+Всё в одном окне, без вкладок и лишних отступов.
+
+Лейаут тянется по ширине (оба столбца weight=1), поля — sticky="ew". Это как рекомендует TkDocs для аккуратных форм. 
+TkDocs
+
+«Случайное» разрешение работает (раньше падало).
+
+Прокси-блок вернули — country_var теперь существует → пресеты больше не падают.
+
+Если хочешь ещё плотнее — уменьши padding у form и pady у строк (например, pady=1), и зафиксируй ширины Entry/Combobox через width=….
+
+Готов добить стилем (цвета/шрифт/иконки), но сначала проверь, что компактный лейаут тебя устраивает визуально.

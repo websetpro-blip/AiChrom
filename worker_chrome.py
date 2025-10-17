@@ -1,27 +1,34 @@
-﻿from __future__ import annotations
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 import threading
 import atexit
 import socket
-import ssl
 import sys
 import time
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import requests
+import psutil
 
 from proxy.models import Proxy
 from tools.chrome_dist import get_chrome_path
 from tools.lock_manager import ProfileLock
 from tools.logging_setup import app_root, get_logger
 import tools.worker_chrome as worker_tools
+from aichrom.cdp_overrides import (
+    apply_geo,
+    apply_tz,
+    apply_ua_lang,
+    ws_url_from_port,
+)
+from aichrom.presets import DEFAULT_CHROME_UA, GEO_PRESETS, label_by_key
 
 # Import websocket for CDP
 try:
@@ -33,6 +40,59 @@ except ImportError:
 ROOT = app_root()
 log = get_logger(__name__)
 
+# Функции блокировки профилей
+def _user_data_dir_for(profile_id: str) -> Path:
+    return Path("profiles") / str(profile_id)
+
+def _lock_path_for(user_data_dir: Path) -> Path:
+    return user_data_dir / ".aichrome.lock"
+
+def _find_running_chrome(user_data_dir: Path):
+    """Вернёт psutil.Process если Chrome уже запущен с этим --user-data-dir."""
+    target = str(user_data_dir).replace("\\", "/")
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            name = (p.info["name"] or "").lower()
+            if "chrome" not in name and "chromium" not in name:
+                continue
+            cmd = " ".join(p.info["cmdline"] or [])
+            if f"--user-data-dir={target}" in cmd:
+                return p
+        except psutil.Error:
+            pass
+    return None
+
+def _acquire_profile_lock(user_data_dir: Path) -> bool:
+    """Создаёт lock c PID текущего процесса-лаунчера.
+       Если есть живой Chrome с этим профилем — отказ (False). Сдохший lock — очищаем и берём."""
+    lock = _lock_path_for(user_data_dir)
+    if lock.exists():
+        try:
+            data = lock.read_text(encoding="utf-8").strip()
+            pid = int(data or "0")
+            if pid and psutil.pid_exists(pid):
+                # Дополнительно сверим, не висит ли именно chrome с этим профилем
+                if _find_running_chrome(user_data_dir):
+                    return False
+            # lock протух — удалим
+        except Exception:
+            pass
+        try:
+            lock.unlink()
+        except Exception:
+            pass
+    try:
+        lock.write_text(str(os.getpid()), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+def _release_profile_lock(user_data_dir: Path):
+    try:
+        _lock_path_for(user_data_dir).unlink(missing_ok=True)
+    except Exception:
+        pass
+
 DEFAULT_PROXY = Proxy(
     scheme="https",
     host="213.139.222.220",
@@ -40,13 +100,6 @@ DEFAULT_PROXY = Proxy(
     username="nDRYz5",
     password="EP0wPC",
 )
-
-# Kazakhstan presets for geo/language/timezone
-KZ_ACCEPT_LANGUAGE = "ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7"
-KZ_TZ = "Asia/Almaty"  # UTC+5 for all Kazakhstan since 2024-03-01
-KZ_ALMATY_GEO = {"latitude": 43.2567, "longitude": 76.9286, "accuracy": 50}
-KZ_ASTANA_GEO = {"latitude": 51.1801, "longitude": 71.4460, "accuracy": 50}
-
 
 def _ensure_text(path: Path, payload: str) -> None:
     path.write_text(payload, encoding="utf-8")
@@ -93,31 +146,41 @@ def _start_local_proxy_wrapper(
 ) -> Optional[str]:
     candidates: List[str] = []
     scheme_lower = (scheme or "http").lower()
+    profile_key = str(profile_id)
     if scheme_lower == "https":
-        candidates.append(f"http+ssl://{user}:{password}@{host}:{port}")
-    candidates.append(f"http://{user}:{password}@{host}:{port}")
+        candidates.append(f"http+ssl://{host}:{port}#{user}:{password}")
+    if user and password:
+        candidates.append(f"http://{user}:{password}@{host}:{port}")
+    else:
+        candidates.append(f"http://{host}:{port}")
 
     for upstream in candidates:
         try:
+            log.info("Trying pproxy wrapper: %s", upstream)
             _ensure_pproxy()
             local_port = _pick_free_port()
             listen = f"http://127.0.0.1:{local_port}"
             cmd = [sys.executable, "-m", "pproxy", "-l", listen, "-r", upstream]
+            log.info("Starting pproxy: %s", " ".join(cmd))
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log.info("pproxy process started with PID: %s", proc.pid)
+            
             if not _wait_listen(local_port):
+                log.error("pproxy failed to bind to port %s, killing process", local_port)
                 proc.kill()
                 continue
-            _LOCAL_WRAPPERS[profile_id] = proc
+                
+            _LOCAL_WRAPPERS[profile_key] = proc
             log.info("Local proxy wrapper started: %s -> %s", listen, upstream)
             return listen
         except Exception as exc:
             log.error("Wrapper attempt failed (%s): %s", upstream, exc)
-            _stop_local_proxy_wrapper(profile_id)
+            _stop_local_proxy_wrapper(profile_key)
     return None
 
 
 def _stop_local_proxy_wrapper(profile_id: str) -> None:
-    proc = _LOCAL_WRAPPERS.pop(profile_id, None)
+    proc = _LOCAL_WRAPPERS.pop(str(profile_id), None)
     if proc and proc.poll() is None:
         try:
             proc.terminate()
@@ -153,7 +216,9 @@ def _build_accept_language(language: str) -> str:
     return ",".join(parts)
 
 
-def _apply_profile_preferences(profile_dir: Path, *, language: str) -> None:
+def _apply_profile_preferences(
+    profile_dir: Path, *, accept_language: str, force_webrtc: bool
+) -> None:
     default_dir = profile_dir / "Default"
     default_dir.mkdir(parents=True, exist_ok=True)
     pref_path = default_dir / "Preferences"
@@ -165,12 +230,19 @@ def _apply_profile_preferences(profile_dir: Path, *, language: str) -> None:
             data = {}
 
     intl = data.setdefault("intl", {})
-    intl["accept_languages"] = _build_accept_language(language)
+    intl["accept_languages"] = accept_language
 
-    webrtc = data.setdefault("webrtc", {})
-    webrtc["ip_handling_policy"] = "disable_non_proxied_udp"
-    webrtc["multiple_routes_enabled"] = False
-    webrtc["nonproxied_udp_enabled"] = False
+    if force_webrtc:
+        webrtc = data.setdefault("webrtc", {})
+        webrtc["ip_handling_policy"] = "disable_non_proxied_udp"
+        webrtc["multiple_routes_enabled"] = False
+        webrtc["nonproxied_udp_enabled"] = False
+    else:
+        if "webrtc" in data:
+            for key in ("ip_handling_policy", "multiple_routes_enabled", "nonproxied_udp_enabled"):
+                data["webrtc"].pop(key, None)
+            if not data["webrtc"]:
+                data.pop("webrtc")
 
     profile_prefs = data.setdefault("profile", {})
     defaults = profile_prefs.setdefault("default_content_setting_values", {})
@@ -179,81 +251,10 @@ def _apply_profile_preferences(profile_dir: Path, *, language: str) -> None:
     data["credentials_enable_service"] = False
     profile_prefs["password_manager_enabled"] = False
 
-    pref_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _get_chrome_major_version(chrome_path: str) -> str:
-    """Extract Chrome major version"""
-    try:
-        output = subprocess.check_output([chrome_path, "--version"], text=True, timeout=5).strip()
-        match = re.search(r"(\d+)\.(\d+)\.(\d+)\.(\d+)", output)
-        return match.group(1) if match else "120"
-    except Exception:
-        return "120"
-
-
-def _cdp_call(ws, method: str, params: Optional[dict] = None, _id=[0]) -> dict:
-    """Make a CDP (Chrome DevTools Protocol) call"""
-    _id[0] += 1
-    payload = {"id": _id[0], "method": method, "params": params or {}}
-    ws.send(json.dumps(payload))
-    while True:
-        msg = json.loads(ws.recv())
-        if msg.get("id") == _id[0]:
-            if "error" in msg:
-                raise RuntimeError(f"CDP error {method}: {msg['error']}")
-            return msg.get("result", {})
-
-
-def _apply_cdp_overrides(debug_port: int, chrome_path: str, user_agent: Optional[str], 
-                         lang: str, tz: Optional[str], geo: Optional[dict] = None) -> None:
-    """Apply UA/Language/Timezone/Geo through Chrome DevTools Protocol"""
-    if not HAS_WEBSOCKET:
-        log.warning("websocket-client not installed, skipping CDP overrides")
-        return
-    
-    try:
-        # Get WebSocket debugger URL
-        version_url = f"http://127.0.0.1:{debug_port}/json/version"
-        ver_response = requests.get(version_url, timeout=5)
-        ver = ver_response.json()
-        ws_url = ver["webSocketDebuggerUrl"]
-        
-        # Build User-Agent (Chrome, not Firefox!)
-        if not user_agent or "Chrome/" not in user_agent:
-            major = _get_chrome_major_version(chrome_path)
-            user_agent = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                         f"AppleWebKit/537.36 (KHTML, like Gecko) "
-                         f"Chrome/{major}.0.0.0 Safari/537.36")
-        
-        accept_language = lang or KZ_ACCEPT_LANGUAGE
-        timezone_id = tz or KZ_TZ
-        
-        # Connect and apply overrides
-        ws = create_connection(ws_url, timeout=5)
-        try:
-            # Set User-Agent and Accept-Language
-            _cdp_call(ws, "Emulation.setUserAgentOverride", {
-                "userAgent": user_agent,
-                "acceptLanguage": accept_language
-            })
-            log.info("CDP: Set UA and Accept-Language")
-            
-            # Set Timezone
-            if timezone_id:
-                _cdp_call(ws, "Emulation.setTimezoneOverride", {"timezoneId": timezone_id})
-                log.info(f"CDP: Set timezone to {timezone_id}")
-            
-            # Set Geolocation
-            if geo:
-                _cdp_call(ws, "Emulation.setGeolocationOverride", geo)
-                log.info(f"CDP: Set geolocation to {geo}")
-                
-        finally:
-            ws.close()
-            
-    except Exception as exc:
-        log.warning(f"Failed to apply CDP overrides: {exc}")
+    pref_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def _create_pac_file(host: str, port: int, scheme: str) -> Path:
@@ -350,6 +351,51 @@ def _resolve_chrome_path(allow_system_chrome: bool) -> str:
     return path
 
 
+def _normalize_preset(preset: Optional[str]) -> str:
+    key = (preset or "none").strip()
+    return key if key in GEO_PRESETS else "none"
+
+
+def _resolve_accept_language(lang: Optional[str], preset_cfg: dict) -> str:
+    candidate = (lang or "").strip()
+    if candidate:
+        if "," in candidate or ";" in candidate:
+            return candidate
+        return _build_accept_language(candidate)
+    value = preset_cfg.get("accept_language")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return _build_accept_language("en-US")
+
+
+def _resolve_timezone(tz: Optional[str], preset_cfg: dict) -> Optional[str]:
+    candidate = (tz or "").strip()
+    if candidate:
+        return candidate
+    value = preset_cfg.get("timezone")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _resolve_geo(preset_cfg: dict) -> Optional[dict]:
+    geo = preset_cfg.get("geo")
+    if isinstance(geo, dict):
+        return dict(geo)
+    return None
+
+
+def _lang_cli_value(accept_language: str, preset_cfg: dict) -> str:
+    custom = preset_cfg.get("lang_cli")
+    if isinstance(custom, str) and custom.strip():
+        return custom.strip()
+    if not accept_language:
+        return "en-US"
+    token = accept_language.split(",")[0].strip()
+    token = token.split(";")[0].strip()
+    return token or "en-US"
+
+
 def launch_chrome(
     profile_id: str,
     user_agent: Optional[str],
@@ -359,27 +405,62 @@ def launch_chrome(
     extra_flags: Optional[List[str]] = None,
     allow_system_chrome: bool = True,
     force_pac: bool = False,
+    preset: str = "none",
+    apply_cdp_overrides: bool = True,
+    force_webrtc_proxy: bool = True,
 ) -> int:
-    profile_dir = ROOT / "profiles" / profile_id
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    """
+    Стартует один (!) Chrome для профиля.
+    Возвращает PID процесса Chrome или поднятого psutil.Process, если уже запущен.
+    """
+    user_data_dir = _user_data_dir_for(profile_id)
+    user_data_dir.mkdir(parents=True, exist_ok=True)
 
-    lock = ProfileLock(profile_dir)
-    lock.acquire()
+    # Если уже есть запущенный — не стартуем второй
+    running = _find_running_chrome(user_data_dir)
+    if running:
+        log.info(f"[launch] profile {profile_id} already running pid={running.pid}")
+        return running.pid
+
+    # Жёсткая защита lock-файлом
+    if not _acquire_profile_lock(user_data_dir):
+        log.info(f"[launch] lock busy for {profile_id}, skip second launch")
+        # финальный дубль-чек — вдруг lock чужой, а процесса нет
+        running = _find_running_chrome(user_data_dir)
+        if running:
+            return running.pid
+        # как fallback — снимем lock и пойдём дальше
+        try:
+            _release_profile_lock(user_data_dir)
+        except Exception:
+            pass
+
+    # выбираем один браузер, без двойных попыток
+    chrome_path = _resolve_chrome_path(allow_system_chrome)
+    if not chrome_path:
+        _release_profile_lock(user_data_dir)
+        raise RuntimeError("Chrome not found")
 
     cleanup_paths: List[Path] = []
     wrapper_id = str(profile_id)
     wrapper_url: Optional[str] = None
 
     try:
-        chrome_path = _resolve_chrome_path(allow_system_chrome)
-        
+        preset_key = _normalize_preset(preset)
+        preset_cfg = GEO_PRESETS.get(preset_key, GEO_PRESETS["none"])
+        accept_language = _resolve_accept_language(lang, preset_cfg)
+        timezone_id = _resolve_timezone(tz, preset_cfg)
+        geo = _resolve_geo(preset_cfg)
+        lang_flag = _lang_cli_value(accept_language, preset_cfg)
+
         # Pick a free port for remote debugging (CDP)
         debug_port = _pick_free_port()
 
         args = [
             chrome_path,
-            f"--user-data-dir={profile_dir}",
+            f"--user-data-dir={user_data_dir}",
             f"--remote-debugging-port={debug_port}",
+            f"--remote-allow-origins=*",
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-popup-blocking",
@@ -402,29 +483,49 @@ def launch_chrome(
             "--no-pings",
             "--password-store=basic",
             "--process-per-site",
-            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
-            "--webrtc-max-cpu-consumption-percentage=1",
-            "--disable-features=WebRtcHideLocalIpsWithMdns",
-            f"--lang={lang or 'en-US'}",
+            f"--lang={lang_flag}",
         ]
-        if user_agent:
-            args.append(f"--user-agent={user_agent}")
+        if force_webrtc_proxy:
+            args.extend(
+                [
+                    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                    "--webrtc-max-cpu-consumption-percentage=1",
+                    "--disable-features=WebRtcHideLocalIpsWithMdns",
+                ]
+            )
+        preset_user_agent = preset_cfg.get("user_agent") if preset_key != "none" else None
+        raw_user_agent = user_agent or preset_user_agent or (DEFAULT_CHROME_UA if preset_key != "none" else "")
+        effective_user_agent = str(raw_user_agent).strip()
+        if effective_user_agent:
+            args.append(f"--user-agent={effective_user_agent}")
+        else:
+            effective_user_agent = None
+        user_agent = effective_user_agent
 
         env = os.environ.copy()
-        if tz:
-            env["TZ"] = tz
+        if timezone_id:
+            env["TZ"] = timezone_id
 
         if proxy:
             scheme, host, port, username, password = detect_proxy_type(proxy)
+            log.info("Proxy detected: scheme=%s host=%s port=%s username=%s password=%s", 
+                    scheme, host, port, username, "***" if password else None)
             _proxy_self_test(proxy)
 
             if username and password and scheme in {"http", "https"}:
+                log.info("Creating pproxy wrapper for authenticated proxy")
                 wrapper_url = _start_local_proxy_wrapper(wrapper_id, scheme, host, port, username, password)
+                log.info("Wrapper URL: %s", wrapper_url)
+            else:
+                log.info("No wrapper created - username=%s password=%s scheme=%s", 
+                        bool(username), bool(password), scheme)
 
             if wrapper_url:
                 args.append(f"--proxy-server={wrapper_url}")
+                log.info("Using wrapper proxy: %s", wrapper_url)
             else:
                 args.append(f"--proxy-server={scheme}://{host}:{port}")
+                log.info("Using direct proxy: %s://%s:%s", scheme, host, port)
                 if force_pac and not (username and password):
                     pac_path = _create_pac_file(host, port, scheme)
                     cleanup_paths.append(pac_path.parent)
@@ -440,34 +541,62 @@ def launch_chrome(
         if extra_flags:
             args.extend(extra_flags)
 
-        _apply_profile_preferences(profile_dir, language=lang or "en-US")
+        _apply_profile_preferences(
+            profile_dir,
+            accept_language=accept_language,
+            force_webrtc=force_webrtc_proxy,
+        )
 
         logs_dir = ROOT / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         (logs_dir / "launcher.log").write_text(" ".join(args), encoding="utf-8")
 
-        log.info("Launching Chrome:\n  %s", "\n  ".join(args))
+        log.info(
+            "Launching Chrome (preset=%s, lang=%s, tz=%s, geo=%s):\n  %s",
+            f"{preset_key} | {label_by_key(preset_key)}",
+            accept_language,
+            timezone_id or "default",
+            geo or "none",
+            "\n  ".join(args),
+        )
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         lock.update_pid(proc.pid)
         
-        # Wait for Chrome to start and apply CDP overrides
-        time.sleep(2)
+        # Ждем пока Chrome запустится и CDP станет доступен
+        time.sleep(3)
+        if apply_cdp_overrides:
+            if not HAS_WEBSOCKET:
+                log.warning("websocket-client not installed, skipping CDP overrides")
+            else:
+                try:
+                    ws_url = ws_url_from_port(debug_port)
+                    apply_ua_lang(
+                        ws_url,
+                        chrome_path,
+                        accept_language,
+                        user_agent=user_agent,
+                    )
+                    if timezone_id:
+                        apply_tz(ws_url, timezone_id)
+                    if geo:
+                        apply_geo(
+                            ws_url,
+                            geo["latitude"],
+                            geo["longitude"],
+                            geo.get("accuracy", 50),
+                        )
+                    log.info("CDP overrides applied successfully")
+                except Exception as exc:
+                    log.warning("CDP overrides failed: %s", exc)
+
+        # перезаписываем lock PID'ом Chrome, не питона-лаунчера — удобнее проверять
         try:
-            # Use Kazakhstan preset if language is Kazakh/Russian
-            geo = None
-            if lang and any(x in lang.lower() for x in ["ru-kz", "kk-kz", "ru_kz"]):
-                geo = KZ_ALMATY_GEO  # Default to Almaty
-            
-            _apply_cdp_overrides(
-                debug_port=debug_port,
-                chrome_path=chrome_path,
-                user_agent=user_agent,
-                lang=lang or "en-US",
-                tz=tz,
-                geo=geo
-            )
-        except Exception as exc:
-            log.warning(f"CDP overrides failed (non-critical): {exc}")
+            _lock_path_for(user_data_dir).write_text(str(proc.pid), encoding="utf-8")
+        except Exception:
+            pass
+
+        # лог финальной команды
+        log.info("Final Chrome command: %s", " ".join(args))
 
         def _cleanup() -> None:
             try:
@@ -483,7 +612,7 @@ def launch_chrome(
                             path.unlink(missing_ok=True)
                     except Exception:
                         pass
-                lock.release_if_dead()
+                _release_profile_lock(user_data_dir)
 
         threading.Thread(target=_cleanup, daemon=True).start()
         return proc.pid
@@ -491,10 +620,7 @@ def launch_chrome(
     except Exception:
         if wrapper_url:
             _stop_local_proxy_wrapper(wrapper_id)
-        try:
-            lock.lock_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _release_profile_lock(user_data_dir)
         raise
 
 
@@ -517,6 +643,9 @@ def launch_chrome_with_profile(
         extra_flags=extra,
         allow_system_chrome=True,
         force_pac=False,
+        preset="none",
+        apply_cdp_overrides=True,
+        force_webrtc_proxy=True,
     )
     log.info("Chrome launched with PID %s", pid)
 
@@ -545,3 +674,6 @@ if __name__ == "__main__":
         log.info("Chrome launched with PID %s", proc)
     else:
         log.error("Proxy self-test failed. Check your proxy configuration.")
+
+
+

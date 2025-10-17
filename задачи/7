@@ -1,0 +1,270 @@
+Окей, разбираю репо и чиню проблему «стартует два Chrome вместо одного». Коротко: у тебя нет жёсткой «защиты от второго запуска» на уровне профиля, плюс кнопка запуска в UI может дергать запуск дважды (и/или fallback пытается открыть второй Chrome). В README у тебя прямо заявлено, что профили защищаются lock-файлами в profiles/<id>/.aichrome.lock— но в коде защита работает не везде, из-за этого и видишь второй экземпляр.
+
+Ниже — готовые правки “под ключ”. Они:
+
+гарантируют один Chrome на профиль (лок-файл + проверка по --user-data-dir через psutil),
+
+исключают двойной запуск через fallback,
+
+фиксируют баги в диалоге профиля (нет generate_random_resolution, country_var),
+
+аккуратно логируют финальную команду.
+
+1) requirements.txt
+
+добавь psutil (для проверки живых процессов и PID из lock-файла):
+
+psutil>=5.9
+
+2) worker_chrome.py — анти-дубль и lock
+
+Вставь / обнови такие утилиты (вверху файла рядом с импортами):
+
+import os, json, time, subprocess, sys
+from pathlib import Path
+import psutil
+# ... остальное, что уже было импортировано ...
+
+
+Добавь функции блокировки и поиска уже запущенного профиля:
+
+def _user_data_dir_for(profile_id: str) -> Path:
+    return Path("profiles") / str(profile_id)
+
+def _lock_path_for(user_data_dir: Path) -> Path:
+    return user_data_dir / ".aichrome.lock"
+
+def _find_running_chrome(user_data_dir: Path):
+    """Вернёт psutil.Process если Chrome уже запущен с этим --user-data-dir."""
+    target = str(user_data_dir).replace("\\", "/")
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            name = (p.info["name"] or "").lower()
+            if "chrome" not in name and "chromium" not in name:
+                continue
+            cmd = " ".join(p.info["cmdline"] or [])
+            if f"--user-data-dir={target}" in cmd:
+                return p
+        except psutil.Error:
+            pass
+    return None
+
+def _acquire_profile_lock(user_data_dir: Path) -> bool:
+    """Создаёт lock c PID текущего процесса-лаунчера.
+       Если есть живой Chrome с этим профилем — отказ (False). Сдохший lock — очищаем и берём."""
+    lock = _lock_path_for(user_data_dir)
+    if lock.exists():
+        try:
+            data = lock.read_text(encoding="utf-8").strip()
+            pid = int(data or "0")
+            if pid and psutil.pid_exists(pid):
+                # Дополнительно сверим, не висит ли именно chrome с этим профилем
+                if _find_running_chrome(user_data_dir):
+                    return False
+            # lock протух — удалим
+        except Exception:
+            pass
+        try:
+            lock.unlink()
+        except Exception:
+            pass
+    try:
+        lock.write_text(str(os.getpid()), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+def _release_profile_lock(user_data_dir: Path):
+    try:
+        _lock_path_for(user_data_dir).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+Теперь обнови свой основной запуск:
+
+def launch_chrome(profile_id: str, chrome_path: str = None, args: list = None, **kwargs):
+    """
+    Стартует один (!) Chrome для профиля.
+    Возвращает subprocess.Popen или поднятый psutil.Process, если уже запущен.
+    """
+    user_data_dir = _user_data_dir_for(profile_id)
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Если уже есть запущенный — не стартуем второй
+    running = _find_running_chrome(user_data_dir)
+    if running:
+        # можно доп. лог: уже запущен
+        _log(f"[launch] profile {profile_id} already running pid={running.pid}")
+        return running
+
+    # Жёсткая защита lock-файлом
+    if not _acquire_profile_lock(user_data_dir):
+        _log(f"[launch] lock busy for {profile_id}, skip second launch")
+        # финальный дубль-чек — вдруг lock чужой, а процесса нет
+        running = _find_running_chrome(user_data_dir)
+        if running:
+            return running
+        # как fallback — снимем lock и пойдём дальше
+        try:
+            _release_profile_lock(user_data_dir)
+        except Exception:
+            pass
+
+    # выбираем один браузер, без двойных попыток
+    chrome = chrome_path or detect_system_chrome() or detect_portable_chrome()
+    if not chrome:
+        _release_profile_lock(user_data_dir)
+        raise RuntimeError("Chrome not found")
+
+    # собираем аргументы
+    final_args = [
+        chrome,
+        f"--user-data-dir={str(user_data_dir)}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        # другие твои флаги ...
+    ]
+    if args:
+        final_args += args
+
+    # лог финальной команды
+    _log(" ".join(final_args))
+
+    proc = subprocess.Popen(final_args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # перезаписываем lock PID’ом Chrome, не питона-лаунчера — удобнее проверять
+    try:
+        _lock_path_for(user_data_dir).write_text(str(proc.pid), encoding="utf-8")
+    except Exception:
+        pass
+
+    return proc
+
+
+И в месте завершения (если у тебя есть обработчик «закрыть профиль» или ловишь падение процесса) обязательно вызывать:
+
+_release_profile_lock(_user_data_dir_for(profile_id))
+
+
+Что это даёт:
+— если UI случайно нажмёт «Запустить» дважды/сработает after() повторно — второй вызов увидит, что уже есть процесс Chrome на этом --user-data-dir, и просто вернётся без старта второго окна.
+— если раньше fallback мог дернуть «портативный» и «системный» подряд — теперь выбирается ровно один путь.
+
+3) multi_browser_manager.py — не дергать запуск дважды + фиксы диалога
+
+Добавь карту живых процессов, чтобы UI сам не дёргал повтор:
+
+self.running = {}  # profile_id -> pid
+
+
+В обработчике «Запустить» сделай guard:
+
+def on_launch_profile(self, profile_id):
+    # уже бежит?
+    pid = self.running.get(profile_id)
+    if pid and psutil.pid_exists(pid):
+        self._log(f"[ui] profile {profile_id} already running pid={pid}")
+        return
+    # запускаем
+    p = worker_chrome.launch_chrome(profile_id, ...)
+    real_pid = p.pid if hasattr(p, "pid") else p.pid  # поддержка psutil.Process
+    self.running[profile_id] = real_pid
+
+
+И при закрытии/стопе — чисти self.running[profile_id].
+
+Также почини диалог (твои стек-трейсы):
+
+generate_random_resolution отсутствует → добавь (см. ниже).
+
+country_var не создан → инициализируй переменную в _build_form (я выше в предыдущем ответе уже показал, как завести все StringVar; добавь self.country_var = tk.StringVar(...)).
+
+Мини-реализация «случайное разрешение», если ещё не вставил:
+
+def generate_random_resolution(self):
+    import random
+    choices = [(1366,768),(1440,900),(1600,900),(1920,1080),(2560,1440)]
+    w,h = random.choice(choices)
+    self.width_var.set(str(w))
+    self.height_var.set(str(h))
+
+4) где чаще всего появляется дубль (и как это ловить)
+
+Двойной вызов из UI: кнопка «Запустить» плюс фоновой after()-поллинг, который на «неуспешный» статус пытается стартануть ещё раз. После п.2–3 выше второй старт будет игнориться.
+
+Двойной fallback: «нашёл системный Chrome» и тут же пробует «портативный» — теперь запрещено (см. выбор одного пути в worker_chrome.launch_chrome).
+
+Запуск ярлыка + прямой запуск: если ты кликаешь .lnk и отдельную кнопку в UI — обе среды стартуют; защита не пустит второй.
+
+Включи себе жёсткий лог: в файле логов ты увидишь ровно одну строку с финальной командой на профиль. Если видишь две — смотри, кто второй раз дергает launch_chrome.
+
+Как проверить быстро
+
+pip install -r requirements.txt (подтянется psutil).
+
+Запусти GUI → профиль → «Запустить» → убедись:
+
+первый клик — Chrome поднялся;
+
+второй клик/повторное действие — никаких новых окон (в логе “already running”).
+
+Убей Chrome → проверь, что lock снялся (или снимается при следующем старте, если браузер упал).
+
+Если хочешь, я дополнительно сожму твоё окно «Профиль» в «дельфиновский» компакт (одна строка для прокси, две колонки формы). Я уже дал рабочую верстку для Tkinter с grid и без лишних отступов — её можно применить сразу; если надо, докину патч под твой текущий multi_browser_manager.py.
+
+Готов продолжить — кидай, если после этих правок где-то ещё всплывает дубль (приложи logs/launcher.log и строку процесса Chrome с --user-data-dir).Анализ кода AiChrom (GitHub, весь проект):
+
+1. Основные точки запуска браузера
+multi_browser_manager.py
+
+Вся логика работы с профилями и основной запуск браузеров (launch_selected) идёт через функцию launch_chrome из worker_chrome.py.
+
+Для каждого профиля создаётся отдельный процесс браузера (subprocess.Popen), при этом контроль процессов реализован через PID и lock-файлы (ProfileLock).
+
+worker_chrome.py
+
+Именно тут происходит реальный запуск браузера через функцию launch_chrome. Эта функция запускает новый процесс Chrome для КАЖДОГО вызова, с отдельной user-data-dir.
+
+Используются обёртки для прокси, подбор флагов и профилей.
+
+Повторный запуск одной и той же функции приводит к созданию нового процесса.
+
+api/engine.py + api/api.py
+
+Логика API почти полностью дублирует логику запуска: по API-запросу каждый старт профиля инициирует новый процесс Chrome.
+
+2. Почему запускается 2 (или больше) браузеров вместо 1?
+Возможные причины на уровне кода:
+Множественное срабатывание команды запуска.
+Если launch_selected вызывается 2 раза подряд (например, быстро два клика), каждый вызов порождает процесс Chrome: нет явной блокировки на уровне UI или процесса. В lock-файле только PID последнего процесса.
+
+Параллельный запуск через API и UI.
+Если одновременно используется графическая оболочка и REST API — оба могут запускать процессы независимо.
+
+Нет проверки на уже запущенный профиль.
+
+В функции launch_selected и внутри launch_chrome отсутствует предотвращение второго запуска для того же профиля: если профиль status=running — повторный запуск всё равно создаст второй процесс с тем же профилем.
+
+3. Как исправить (по коду)?
+В функции запуска launch_selected (и аналоги через API) добавить проверку:
+
+Если профиль уже запущен (по lock-файлу или PID procésса), не запускать второй раз, а показывать предупреждение.
+
+Желательно сделать атомарную проверку+запуск с блокировкой (например, через lock-файл, как уже используется).
+
+4. Где менять:
+Файл: multi_browser_manager.py
+
+Функция: launch_selected
+
+Файл: api/engine.py
+
+Функция: start_profile
+
+Файл: worker_chrome.py
+
+Функция: launch_chrome (при желании – double-check тут).
+
+РЕЗЮМЕ
+Сейчас не хватает жёсткой проверки "уже запущено" для профиля. Любой повторный запуск — новый процесс, поэтому видно 2+ браузера на одном профиле. Эту логику нужно дописать в главном менеджере до вызова worker_chrome.
