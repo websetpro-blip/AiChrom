@@ -150,11 +150,8 @@ def _start_local_proxy_wrapper(
     if scheme_lower == "https":
         candidates.append(f"http+ssl://{host}:{port}#{user}:{password}")
     if user and password:
-        # Экранируем URL для pproxy
-        import urllib.parse
-        user_escaped = urllib.parse.quote(user, safe='')
-        password_escaped = urllib.parse.quote(password, safe='')
-        candidates.append(f"http://{user_escaped}:{password_escaped}@{host}:{port}")
+        # Используем правильный синтаксис для pproxy
+        candidates.append(f"http://{user}:{password}@{host}:{port}")
     else:
         candidates.append(f"http://{host}:{port}")
 
