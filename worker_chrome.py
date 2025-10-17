@@ -46,7 +46,7 @@ def _resolve_chrome_binary(profile: dict, chrome_path: str = None) -> str:
     Порядок выбора Chrome бинаря:
     1) chrome_path из аргумента (если задан и файл существует)
     2) profile["chrome_path"] (если существует файл)
-    3) (fallback) get_chrome_path() - системный Chrome
+    3) (fallback) get_chrome_path() - portable Chrome из tools/chrome/ или системный
     """
     # 1) chrome_path из аргумента
     if chrome_path and Path(chrome_path).is_file():
@@ -59,13 +59,13 @@ def _resolve_chrome_binary(profile: dict, chrome_path: str = None) -> str:
         log.info("Using Chrome from profile: %s", p)
         return p
 
-    # 3) fallback - системный Chrome
+    # 3) fallback - используем старую логику get_chrome_path (portable + системный)
     try:
         c = get_chrome_path(allow_system=True)
-        log.info("Using fallback system Chrome: %s", c)
+        log.info("Using fallback Chrome: %s", c)
         return c
     except FileNotFoundError:
-        raise RuntimeError("Chrome binary not found. Укажи 'Браузер (exe)' в профиле.")
+        raise RuntimeError("Chrome binary not found. Укажи 'Браузер (exe)' в профиле или помести portable Chrome в tools/chrome/.")
 
 # Функции блокировки профилей
 def _user_data_dir_for(profile_id: str) -> Path:
