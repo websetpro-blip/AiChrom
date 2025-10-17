@@ -59,7 +59,28 @@ class ProfileLock:
     def read(self) -> dict:
         try:
             if self.lock_path.exists():
-                return json.loads(self.lock_path.read_text(encoding="utf-8"))
+                content = self.lock_path.read_text(encoding="utf-8").strip()
+                if not content:
+                    return {}
+                
+                # Пробуем распарсить как JSON
+                try:
+                    data = json.loads(content)
+                    # Если это число (старый формат), конвертируем в новый
+                    if isinstance(data, (int, str)):
+                        try:
+                            pid = int(data)
+                            return {"chrome_pid": pid, "ts": 0}
+                        except (ValueError, TypeError):
+                            return {}
+                    return data if isinstance(data, dict) else {}
+                except json.JSONDecodeError:
+                    # Если не JSON, пробуем как простое число (старый формат)
+                    try:
+                        pid = int(content)
+                        return {"chrome_pid": pid, "ts": 0}
+                    except (ValueError, TypeError):
+                        return {}
         except Exception:
             pass
         return {}
