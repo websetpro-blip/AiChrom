@@ -1,0 +1,919 @@
+Окей, жёстко и по делу. Ситуация у тебя не баг софта, а смесь двух факторов:
+
+Репутация IP. KZ-HTTP(S) прокси из шэринга очень часто уже «побитые» на крупных сайтах, поэтому Cloudflare/ChatGPT, Google и Яндекс хард-челленджат или режут флоу. OpenAI прямо пишет: если видишь «You’ve been blocked», это часто сетевые ограничения, VPN/прокси и подозрительный трафик. 
+OpenAI Help Center
+ Google про «Unusual traffic» тоже говорит: VPN/общий IP ⇒ капчи/блоки; рекомендуют менять сеть/провайдера. 
+support.google.com
+
+Пальцы не сходятся. На твоих скринах профиль запускает Chrome, а User-Agent стоит Firefox, часовой пояс America/Sao_Paulo, язык en-US, а прокси — Казахстан. Для антибота это красная тряпка: браузер шлёт Chrome-специфичные User-Agent Client Hints (Sec-CH-UA, Sec-CH-UA-Platform) даже если подменить UA строку — и несоответствие видно сразу. 
+web.dev
+ Яндекс/Google сами по себе будут кидать SmartCaptcha/рекапчу на «подозрительное» поведение/сети. 
+yandex.cloud
++1
+
+Плюс на одном скрине был баннер «for testing / unsupported flag», что тоже палится (тестовые флаги/сборки часто дают повышенный риск). А Google сейчас вообще активнее включает QR-верификацию при регистрации, если среда кажется «нестандартной». 
+aiprotips.net
+
+Что исправить в коде (минимальный боевой патч)
+
+Ниже патч для worker_chrome.py, чтобы AiChrom вёл себя как нормальный мультибраузер:
+
+Перестать несоответствовать самому себе: ставим Chrome UA, а не Firefox.
+
+Подхватывать TZ/язык из твоего self-test (ip-api) и применять к профилю.
+
+--force-time-zone=<tz> (хромовский флаг существует; список CLI-свитчей см. в справочнике). 
+Woolyss
+
+--lang=ru и prefs intl.accept_languages="ru-RU,ru;q=0.9" (это именно тот заголовок, который любят проверять; хром может брать его из префов/флага). 
+Stack Overflow
+
+WebRTC: оставляем мьют (ты уже включал), если надо — форсируем политику, чтобы не светить локалки: --webrtc-ip-handling-policy=disable_non_proxied_udp / мДНС. (Опция реально есть/используется в Chromium.) 
+bugzilla.mozilla.org
+
+Убираем тестовые флаги (--disable-site-isolation-trials, dev/test), чтобы не ловить лишние эвристики.
+
+Оставляем pproxy-обёртку (логин/пароль не всплывает — это ты уже пофиксили).
+
+Патч (унифицированный diff)
+diff --git a/worker_chrome.py b/worker_chrome.py
+@@
+-    def _build_chrome_cmd(self, profile_id, proxy_url=None, ua_override=None, extra_args=None):
++    def _build_chrome_cmd(self, profile_id, proxy_url=None, ua_override=None, extra_args=None, geo=None):
+         profile_dir = self._profile_dir(profile_id)
+         os.makedirs(profile_dir, exist_ok=True)
+ 
+         chrome = self._resolve_chrome_binary()  # уже есть
+-        args = [
+-            chrome,
+-            f'--user-data-dir={profile_dir}',
+-            '--no-first-run',
+-            '--no-default-browser-check',
+-        ]
++        args = [chrome,
++                f'--user-data-dir={profile_dir}',
++                '--no-first-run',
++                '--no-default-browser-check']
+ 
+         # 1) Прокси (через локальный wrapper 127.0.0.1, уже сделано выше)
+         if proxy_url:
+             args.append(f'--proxy-server={proxy_url}')
+ 
+-        # 2) User-Agent как есть из профиля
+-        if ua_override:
+-            args.append(f'--user-agent={ua_override}')
++        # 2) Нормализуем User-Agent: Chrome, не Firefox (чтобы не палиться с CH-headers).
++        ua = ua_override or self.profile_store.get(profile_id, 'user_agent')
++        if not ua or 'Chrome/' not in ua:
++            # Подставим реалистичный Chrome UA (с твоей версией или дефолтной).
++            ua = self._default_chrome_ua()  # верни "Mozilla/5.0 (...) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36"
++        args.append(f'--user-agent={ua}')
+ 
+-        # 3) Прочие флаги (раньше были тестовые, убираем)
+-        args += ['--disable-site-isolation-trials']
++        # 3) Язык/часовой пояс по итогам self-test (ip-api), чтобы совпадали с гео прокси.
++        #    geo: {"timezone": "Asia/Almaty", "countryCode": "KZ", "lang": "ru-RU,ru;q=0.9"}
++        if geo and geo.get('timezone'):
++            args.append(f"--force-time-zone={geo['timezone']}")
++        # Заголовок Accept-Language хром берёт из prefs и/или --lang, поставим оба.
++        accept_lang = (geo.get('lang') if geo else None) or 'en-US,en;q=0.9'
++        args.append('--lang=' + accept_lang.split(',')[0])
++        self._ensure_chrome_prefs(profile_dir, {
++            "intl": {"accept_languages": accept_lang}
++        })
++
++        # 4) WebRTC не светит локальные IP вне прокси
++        args.append('--webrtc-ip-handling-policy=disable_non_proxied_udp')
++        args.append('--force-webrtc-ip-handling-policy')  # на некоторых сборках требуется явное форсирование
++        args.append('--enable-webrtc-hide-local-ips-with-mdns')
+ 
+         if extra_args:
+             args += extra_args
+         return args
+ 
++    def _ensure_chrome_prefs(self, profile_dir, patch):
++        # правим JSON Preferences в профиле (Default/Preferences)
++        pref_path = os.path.join(profile_dir, 'Default', 'Preferences')
++        os.makedirs(os.path.dirname(pref_path), exist_ok=True)
++        data = {}
++        if os.path.exists(pref_path):
++            try:
++                with open(pref_path, 'r', encoding='utf-8') as f:
++                    data = json.load(f)
++            except Exception:
++                data = {}
++        # неглубокий merge
++        data.setdefault('intl', {}).update(patch.get('intl', {}))
++        with open(pref_path, 'w', encoding='utf-8') as f:
++            json.dump(data, f, ensure_ascii=False)
++
+     def launch_chrome(self, profile_id, proxy_conf, *_, **__):
+         # ... self-test уже есть, здесь просто прокидываем geo в _build_chrome_cmd
+-        cmd = self._build_chrome_cmd(profile_id, proxy_url=local_wrapper, ua_override=ua, extra_args=extra)
++        geo = {"timezone": ip_api.get("timezone"),
++               "countryCode": ip_api.get("countryCode"),
++               # простая локаль по стране; для KZ — русский по умолчанию
++               "lang": "ru-RU,ru;q=0.9" if ip_api.get("countryCode") in ("KZ","RU","BY","UA") else "en-US,en;q=0.9"}
++        cmd = self._build_chrome_cmd(profile_id, proxy_url=local_wrapper, ua_override=ua, extra_args=extra, geo=geo)
+         # логируем итоговую команду и запускаем
+
+
+Зачем это нужно:
+• Chrome шлёт Client Hints про себя (бренд/платформа). Если строка UA «Firefox», а CH — «Chromium/Chrome», антибот это видит. 
+web.dev
+
+• reCAPTCHA/SmartCaptcha/Cloudflare повышают фрикцию при VPN/прокси/общих IP. Это описано у Google и OpenAI. 
+support.google.com
++1
+
+• Выставление таймзоны/языка как у прокси снижает «нестандартность» сессии.
+• WebRTC — подчищаем потенциальные утечки маршрута. 
+bugzilla.mozilla.org
+
+Чек-лист, чтобы понять «это IP или софт»
+
+Проверка отпечатка (в самом AiChrom):
+
+Зайди на https://api.ipify.org?format=json и https://whatismybrowser.com/ — смотри, что UA = Chrome, язык и платформа совпадают. (Chrome по умолчанию отправляет Client Hints, так что несоответствие видно даже при фейковом UA. 
+web.dev
+)
+
+Google: если видишь «Unusual traffic», это почти всегда сеть/адрес. Google прямо говорит — VPN/общие IP ⇒ капчи. 
+support.google.com
+
+ChatGPT: «You’ve been blocked / unusual activity» → сетевые ограничения/подозрительный трафик. 
+OpenAI Help Center
+
+Яндекс: их Smart Web Security умеет отправлять трафик «сомнительных IP» в SmartCaptcha списочно/по правилам — это на стороне сервиса. 
+yandex.cloud
+
+Если после патча язык/часовой пояс/UA стали консистентными, но капчи остались, — это репутация прокси. Тут поможет только другой пул IP (особенно для ChatGPT/Google). Cloudflare-сайты часто «ломятся» на шэринг-IP вне зависимости от отпечатка.
+
+Почему твой нынешний запуск ловит капчи
+
+UA=Firefox + Chrome-CH → рассинхрон. 
+web.dev
+
+TZ/Accept-Language не из гео прокси → подозрительно для авторизаций/регистраций. Google в таких сценариях всё чаще переводит на QR-верификацию. 
+aiprotips.net
+
+KZ-HTTP(s) прокси из шэринга → высокий шанс в общих блок-листах у крупных площадок. 
+support.google.com
++1
+
+Что сказать «комету», чтобы доделал «под ключ»
+
+Примени мой патч: нормализация UA + язык + таймзона + prefs + WebRTC.
+
+В Self-Test уже дергается ip-api — протяни timezone/country в launch_chrome() (в патче это есть).
+
+Убери тестовые флаги (включая те, что дают баннер «for testing/unsupported flag»).
+
+Оставь pproxy-обёртку (без расширений и без basic-auth диалогов).
+
+Добавь в UI галки «Подставлять язык/часовой пояс по IP».
+
+Если хочешь, я допишу патч сразу с готовым self_test → geo → prefs (без разговоров) и дам дифф под твою ветку — скажи. Но даже с этим патчем имей в виду: IP-репутацию кодом не лечишь. Для ChatGPT/Google иногда нужны другие IP-типы (ISP/resi/мобайл) — иначе капча останется при любом отпечатке. 
+OpenAI Help Center
++1
+
+Вы сказали:
+Unable to load site
+
+Please try again later. If you are using a VPN, try turning it off. Check the status page for information on outages.
+
+[IP:213.139.222.220 | Ray ID:98fbaa6a7f47ec33]Коротко: у тебя тут две вещи одновременно.
+
+Главная причина блоков/капч — сам IP.
+ChatGPT/Google/Яндекс стоят за Cloudflare/anti-bot’ами. Сообщение “Unable to load site … Ray ID …” и массовые капчи у Google/Яндекса — классический признак того, что IP/подсеть в плохой репутации или в правилах WAF (часто шэренный дата-центр/фарм). Это не чинится кодом браузера: это блок на уровне сети/правил владельца сайта. См. как Cloudflare 1020/блоки работают (блок по IP/гео/правилам), и как Google включает “unusual traffic” именно по сети/автоматизации. 
+Stack Overflow
++3
+help.netonboard.com
++3
+Bobcares
++3
+
+Дополнительные триггеры у тебя в профиле: у тебя в UI стоит Firefox UA при запуске Chrome + не совпадают язык/Accept-Language/часовой пояс. Даже если поменяешь строку UA, Chrome всё равно шлёт Client Hints (Sec-CH-UA*), где явно светит “Chromium / Google Chrome”, что даёт рассинхрон “Firefox-UA vs CH-Chrome”. Это усиливает проверки/капчи. 
+Chrome for Developers
++2
+developer.mozilla.org
++2
+
+Ниже даю готовые точечные правки в AiChrom, чтобы убрать лишние поводы для капч и всегда запускать профиль с корректной гео-конфигурацией (но помни: если IP плохой, капчи не исчезнут полностью).
+
+Что сделать в коде (готовые правки)
+A. Не спуфить под Firefox, если запускаем Chrome
+
+В профиле оставляй Chrome UA, либо приведи CH к тому же браузеру. Проще и надёжнее — Chrome UA + вычистить sec-ch-ua* (см. пункт B).
+
+worker_chrome.py — принудительно выставить реальный UA под Chrome
+
+При сборке аргументов запуска добавь (если профайл выбрал не-Chrome UA, переопредели на валидный Chrome-UA):
+
+chrome_args += [
+    f'--user-agent={profile.chrome_user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}'
+]
+
+B. Снять конфликт UA vs Client Hints
+
+MV3-расширение на профиль, которое удаляет sec-ch-ua* и нормализует Accept-Language. Низкоэнтропийные CH реально шлются по умолчанию (см. доки), их можно срезать через webRequest c blocking+extraHeaders. 
+Chrome for Developers
++1
+
+manifest.json (per-profile, MV3):
+
+{
+  "manifest_version": 3,
+  "name": "AiChrom CH scrub",
+  "version": "1.0",
+  "permissions": ["webRequest", "webRequestBlocking", "declarativeNetRequest", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "bg.js" }
+}
+
+
+bg.js:
+
+const LANG = chrome.storage ? null : null;
+// срежем CH и зададим Accept-Language из storage профиля
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    const headers = details.requestHeaders.filter(h => {
+      const n = h.name.toLowerCase();
+      return !(
+        n === 'sec-ch-ua' ||
+        n === 'sec-ch-ua-mobile' ||
+        n === 'sec-ch-ua-platform' ||
+        n === 'sec-ch-ua-full-version' ||
+        n === 'sec-ch-ua-full-version-list' ||
+        n === 'sec-ch-ua-platform-version'
+      );
+    });
+    // подставим нужный Accept-Language
+    const want = (details.initiator && details.initiator.startsWith('chrome')) ? null : null;
+    const lang = (globalThis.__AICHROM_LANG || 'en-US,en;q=0.9');
+    headers.push({ name: 'Accept-Language', value: lang });
+    return { requestHeaders: headers };
+  },
+  { urls: ["<all_urls>"] },
+  ["blocking", "requestHeaders", "extraHeaders"]
+);
+
+// получаем язык из storage, записанного при запуске
+chrome.storage.local.get('accept_language', (o) => {
+  globalThis.__AICHROM_LANG = o.accept_language || 'en-US,en;q=0.9';
+});
+
+
+worker_chrome.py перед запуском браузера сохраняй язык профиля в локальное хранилище расширения:
+
+# после генерации каталога расширения profile_ext_dir
+(lang, tz) = (profile.accept_language or "en-US,en;q=0.9", profile.timezone or None)
+# записать конфиг для св-воркера
+with open(os.path.join(profile_ext_dir, 'lang_seed.json'), 'w', encoding='utf-8') as f:
+    json.dump({"accept_language": lang}, f)
+
+# и при старте добавь аргументы расширения:
+chrome_args += [
+  f'--load-extension={profile_ext_dir}',
+  f'--disable-extensions-except={profile_ext_dir}'
+]
+
+
+А в bg.js в самом начале можно подхватить lang_seed.json через fetch(chrome.runtime.getURL("lang_seed.json"))... и chrome.storage.local.set.
+
+C. Правильный Accept-Language и UI-язык
+
+Сам Accept-Language браузер берёт из prefs (intl.accept_languages). Надёжно — перед запуском править файл Preferences в user-data-dir профиля.
+
+prefs_path = os.path.join(user_data_dir, 'Default', 'Preferences')
+prefs = {}
+if os.path.exists(prefs_path):
+    prefs = json.load(open(prefs_path, 'r', encoding='utf-8'))
+prefs.setdefault('intl', {})['accept_languages'] = profile.accept_language or "en-US,en;q=0.9"
+with open(prefs_path, 'w', encoding='utf-8') as f:
+    json.dump(prefs, f, ensure_ascii=False)
+# дублируем флагом:
+chrome_args += [f'--lang={ (profile.accept_language or "en-US").split(",")[0] }']
+
+
+MDN подтверждает, что Accept-Language — именно тот заголовок, который серверы читают для локали. 
+developer.mozilla.org
+
+D. Таймзона/гео через CDP (без внешних расширений)
+
+Chrome официально поддерживает DevTools Protocol — можно задать TZ и гео до загрузки страницы. 
+chromedevtools.github.io
++1
+
+В worker_chrome.py запускай Chrome с --remote-debugging-port=0, вычитай реальный порт из chrome://version (или \pid\local-state), затем:
+
+def _cdp_cmd(ws, method, params=None):
+    msg = {"id": random.randint(1, 1_000_000), "method": method, "params": params or {}}
+    ws.send(json.dumps(msg))
+    return json.loads(ws.recv())
+
+# после старта Chrome:
+version = requests.get(f'http://127.0.0.1:{rdp_port}/json/version').json()
+ws_url = version['webSocketDebuggerUrl']
+ws = websocket.create_connection(ws_url, timeout=5)
+
+# часовой пояс и язык
+_cdp_cmd(ws, 'Emulation.setTimezoneOverride', {"timezoneId": profile.timezone or "Asia/Almaty"})
+_cdp_cmd(ws, 'Emulation.setUserAgentOverride', {
+  "userAgent": chrome_ua,
+  "acceptLanguage": (profile.accept_language or "en-US"),
+  "platform": "Windows",
+  # при желании можно передать userAgentMetadata, чтобы CH совпали с UA
+})
+ws.close()
+
+
+Emulation.setTimezoneOverride — штатный метод CDP. 
+chromedevtools.github.io
+
+E. WebRTC — оставить как есть (у тебя уже ок)
+
+Важно не светить реальный IP в UDP. В Chrome это решают политикой IP-handling; у тебя уже “leak prevention”, оставь так.
+
+Что проверять после правок
+
+Сначала IP-гипотеза.
+Запусти профиль и открой Google → при запросе сразу капча/“unusual traffic” — это почти всегда IP/диапазон. Google/Cloudflare так и документируют (shared IP / автоматизация / WAF-правила). 
+Google for Developers
++2
+Stack Overflow
++2
+
+➜ Проверь этот же профиль с другим IP (моб./резиденс/другой DC). Если капчи пропали — ответ очевиден: меняй пул прокси или провайдера.
+
+Консистентность клиента.
+На https://user-agent-client-hints.glitch.me/ сравни: строка UA vs Sec-CH-UA*, платформа, язык. Они должны совпадать (Chrome + Windows + твой язык). Иначе сервер увидит рассинхрон. (CH по умолчанию включены в Chrome с 89-й версии.) 
+Chrome for Developers
+
+Язык/Accept-Language.
+Проверь заголовки на https://httpbin.org/headers — Accept-Language должен быть именно тем, что выставил профиль. 
+developer.mozilla.org
+
+TZ/гео.
+В консоли страницы Intl.DateTimeFormat().resolvedOptions().timeZone → должен быть твоим TZ. CDP-оверрайд это обеспечивает. 
+chromedevtools.github.io
+
+Ответ на твой вопрос “это настройки или IP?”
+
+В твоём кейсе первичный блок — IP/диапазон (Cloudflare/Google). Это не исправляется сменой UA/языка. 
+help.netonboard.com
++1
+
+Но расхождения (Firefox-UA при Chrome, нелогичный Accept-Language/TZ) создают дополнительный риск и чаще показывают капчи. Исправь это патчами выше — станет чуть “мягче”, но если IP плохой, капчи всё равно будут.
+
+Если нужно, соберу это в один PR: генерация профильного расширения (scrub CH + LANG), запись intl.accept_languages, CDP-оверрайд TZ/UA-metadata и логирование.Ок, делаем «казахский пресет», чтобы профиль сразу стартовал как “обычный пользователь из KZ”, без диалогов по прокси, с сохранением кук и минимальными триггерами антиботов. Ниже — готовый патч + что именно он включает.
+
+Главные идеи (почему так):
+
+Сайты (в т.ч. OpenAI/Google/Yandex) проверяют связку: User-Agent ↔ Client Hints ↔ Accept-Language ↔ TZ/гео. Несоответствия (например, Firefox-UA в Chrome, en-GB при TZ Asia/Almaty и т.п.) резко повышают риск капчи. HTTP-стек читает Accept-Language и метаданные UA/CH; эти вещи влияют на риск-фактор напрямую.
+
+TZ для Казахстана с 01.03.2024 единый UTC+5 (Asia/Almaty), так что выставляем именно его. 
+The Astana Times
++2
+Техническое Сообщество Microsoft
++2
+
+Применяем всё принудительно через Chrome DevTools Protocol (CDP): Emulation.setTimezoneOverride, Emulation.setUserAgentOverride(acceptLanguage=...), Emulation.setGeolocationOverride — это поддерживаемый и надёжный путь.
+
+WebRTC ограничиваем до disable_non_proxied_udp, чтобы не было утечек вне прокси/обёртки (в коде это кладём в prefs, что соответствует enterprise-политике WebRtcIPHandling). 
+Instinctive
++1
+
+ПАТЧ
+
+Скопируй содержимое ниже в файл kz_preset.patch и примени из корня репо:
+
+git pull
+git apply --whitespace=fix kz_preset.patch
+pip install -r requirements.txt
+
+*** a/requirements.txt
+--- b/requirements.txt
+@@
+ requests>=2.31
++websocket-client>=1.6
+ pproxy>=2.7
+
+*** a/worker_chrome.py
+--- b/worker_chrome.py
+@@
+ import os, sys, json, time, shutil, socket, subprocess, tempfile, logging, re
+ import pathlib
+ import requests
++import threading
++from urllib.parse import urlparse
++from contextlib import closing
++from websocket import create_connection  # from websocket-client
+ 
+@@
+ LOG = logging.getLogger("worker_chrome")
+ 
++# ---------- KZ preset (Accept-Language/TZ/Geo) ----------
++KZ_ACCEPT_LANGUAGE = "ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7"
++# координаты Алма-Аты (достаточно городского уровня точности)
++KZ_GEO = {"latitude": 43.2567, "longitude": 76.9286, "accuracy": 50}
++KZ_TZ = "Asia/Almaty"  # единая зона UTC+5 c 2024-03-01
++
++def _pick_free_port():
++    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
++        s.bind(("127.0.0.1", 0))
++        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
++        return s.getsockname()[1]
++
++def _chrome_major_version(chrome_path):
++    try:
++        out = subprocess.check_output([chrome_path, "--version"], text=True).strip()
++        # "Google Chrome 128.0.6613.120"
++        m = re.search(r"(\d+)\.(\d+)\.(\d+)\.(\d+)", out)
++        return (m.group(1) if m else "128")
++    except Exception:
++        return "128"
++
++def _cdp_call(ws, method, params=None, _id=[0]):
++    _id[0] += 1
++    payload = {"id": _id[0], "method": method, "params": params or {}}
++    ws.send(json.dumps(payload))
++    # читаем до ответа с тем же id
++    while True:
++        msg = json.loads(ws.recv())
++        if msg.get("id") == _id[0]:
++            if "error" in msg:
++                raise RuntimeError(f"CDP error {method}: {msg['error']}")
++            return msg.get("result")
++
++def _apply_kz_overrides_via_cdp(debug_port, chrome_path, ua_override=None,
++                                accept_language=None, tz_id=None, geo=None):
++    """Подключаемся к DevTools и применяем UA/Lang/TZ/Geo."""
++    # 1) получаем WS-эндпоинт
++    ver = requests.get(f"http://127.0.0.1:{debug_port}/json/version", timeout=5).json()
++    ws_url = ver["webSocketDebuggerUrl"]
++    # 2) формируем UA (Windows Chrome X.Y…)
++    major = _chrome_major_version(chrome_path)
++    ua = ua_override or f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) " \
++                        f"AppleWebKit/537.36 (KHTML, like Gecko) " \
++                        f"Chrome/{major}.0.0.0 Safari/537.36"
++    lang = accept_language or KZ_ACCEPT_LANGUAGE
++    tz   = tz_id or KZ_TZ
++    geo  = geo or KZ_GEO
++    # 3) коннект и CDP-команды
++    ws = create_connection(ws_url, timeout=5)
++    try:
++        # UA + Accept-Language (поддерживается CDP)
++        _cdp_call(ws, "Emulation.setUserAgentOverride",
++                  {"userAgent": ua, "acceptLanguage": lang})
++        # Часовой пояс (Asia/Almaty, UTC+5)
++        _cdp_call(ws, "Emulation.setTimezoneOverride", {"timezoneId": tz})
++        # Геолокация (требует включенных разрешений на уровне профиля/сессии)
++        _cdp_call(ws, "Emulation.setGeolocationOverride", geo)
++    finally:
++        ws.close()
++
++def _ensure_webrtc_prefs(user_data_dir):
++    """
++    Ставим prefs, эквивалентные политике WebRtcIPHandling=disable_non_proxied_udp,
++    чтобы не было утечек вне прокси/обёртки.
++    """
++    pref_path = pathlib.Path(user_data_dir) / "Default" / "Preferences"
++    pref_path.parent.mkdir(parents=True, exist_ok=True)
++    prefs = {}
++    if pref_path.exists():
++        try:
++            prefs = json.loads(pref_path.read_text(encoding="utf-8"))
++        except Exception:
++            prefs = {}
++    intl = prefs.setdefault("intl", {})
++    # не навязываем здесь lang (делаем через CDP), но оставим задел
++    webrtc = prefs.setdefault("webrtc", {})
++    webrtc["ip_handling_policy"] = "disable_non_proxied_udp"
++    webrtc["multiple_routes_enabled"] = False
++    webrtc["nonproxied_udp_enabled"] = False
++    pref_path.write_text(json.dumps(prefs, ensure_ascii=False, indent=2), encoding="utf-8")
+ 
+@@
+-def launch_chrome(profile_id, chrome_path, proxy=None, user_agent=None, lang=None, tz=None, **kw):
++def launch_chrome(profile_id, chrome_path, proxy=None, user_agent=None, lang=None, tz=None, **kw):
+     """
+     Запуск Chrome под профиль.
+     """
+     profile_dir = pathlib.Path("profiles") / str(profile_id)
+     profile_dir.mkdir(parents=True, exist_ok=True)
+@@
+-    args = [
++    debug_port = _pick_free_port()
++    args = [
+         chrome_path,
+         f"--user-data-dir={profile_dir}",
+         "--no-first-run",
+         "--no-default-browser-check",
++        f"--remote-debugging-port={debug_port}",
+     ]
+@@
+-    # прокси задаётся через обёртку pproxy (если требуется авторизация)
++    # прокси задаётся через обёртку pproxy (если требуется авторизация)
+     local_proxy = None
+     if proxy:
+         local_proxy = _start_local_proxy_wrapper(proxy)  # уже реализовано в проекте
+         args.append(f"--proxy-server={local_proxy}")
+@@
+-    # UA / язык / TZ (часть — флагами, часть — через DevTools после запуска)
+-    if user_agent:
+-        args.append(f"--user-agent={user_agent}")
+-    if lang:
+-        args.append(f"--lang={lang}")
+-    if tz:
+-        # попробуем флагом, если не сработает — CDP ниже
+-        args.append(f"--force-time-zone={tz}")
++    # Предпочтительно применяем UA/Lang/TZ через CDP, чтобы браузерный стек
++    # и заголовки совпадали. Для совместимости оставим флаги, если явно заданы:
++    if user_agent:
++        args.append(f"--user-agent={user_agent}")
++    if lang:
++        args.append(f"--lang={lang}")
+ 
+     # безопасные/стабильные флаги (убраны тестовые из CfT)
+     args.extend([
+         "--disable-background-networking",
+         "--disable-sync",
+         "--disable-features=Translate"
+     ])
+@@
+-    proc = subprocess.Popen(args)
++    # Профильные prefs для WebRTC, до старта
++    _ensure_webrtc_prefs(profile_dir)
++    proc = subprocess.Popen(args)
+ 
+     # ожидание старта
+     time.sleep(3)
+ 
+-    # если нужно – применим CDP-оверрайды
+-    try:
+-        if lang or tz:
+-            # ... ранее было пусто ...
+-            pass
+-    except Exception as e:
+-        LOG.warning("CDP overrides failed: %s", e)
++    # CDP-оверрайды KZ (или значения из параметров, если заданы)
++    try:
++        _apply_kz_overrides_via_cdp(
++            debug_port=debug_port,
++            chrome_path=chrome_path,
++            ua_override=user_agent,                    # если None — подберём Chrome/major
++            accept_language=lang or KZ_ACCEPT_LANGUAGE,
++            tz_id=tz or KZ_TZ,
++            geo=KZ_GEO
++        )
++    except Exception as e:
++        LOG.warning("CDP overrides failed: %s", e)
+ 
+     return proc
+
+Что конкретно даёт патч
+
+Пресет для KZ
+
+Accept-Language: ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7 (KZ-русский первым, потом казахский, затем английский). Это уходит в сетевые заголовки через CDP.
+
+Часовой пояс: Asia/Almaty (единый UTC+5 для всей страны с 2024-03-01). 
+The Astana Times
++1
+
+Геолокация: Алма-Ата (широта/долгота). Можно поменять на Астану при желании. 
+Time OK
+
+User-Agent: формируем «Windows Chrome <MAJOR>…», чтобы исключить фатальные несоответствия типа «Firefox UA + Chrome движок». Применяем через Emulation.setUserAgentOverride.
+
+WebRTC без утечек
+Перед запуском пишем prefs, эквивалентные политике WebRtcIPHandling=disable_non_proxied_udp (без UDP вне прокси). Это соответствует enterprise-документам про WebRTC IP handling. 
+Instinctive
++1
+
+CDP-применение
+Запускаем Chrome с --remote-debugging-port, цепляемся веб-сокетом и программно задаём TZ/UA/Language/Geo — это официальный способ из CDP.
+
+Как включить и проверить быстро
+
+Применить патч и зависимости:
+
+git pull
+git apply --whitespace=fix kz_preset.patch
+pip install -r requirements.txt
+
+
+В UI профиля укажи:
+
+OS: Windows (не ставь Mac/Firefox-UA — это ломает поведение).
+
+Язык (Accept-Language) оставь пустым — патч поставит KZ-набор сам; либо задай строку из пресета.
+
+Часовой пояс (TZ) можно оставить пустым — будет Asia/Almaty.
+
+Запусти профиль. Проверь:
+
+chrome://version → User Agent содержит Windows … Chrome/….
+
+https://api.ipify.org?format=json — IP виден от твоего KZ-прокси.
+
+chrome://webrtc-internals и тест на browserleaks — нет локальных IP, только через прокси (или вообще пусто при ограничении). Политика соответствует disable_non_proxied_udp. 
+Instinctive
+
+new Date().getTimezoneOffset() в DevTools даёт -300 (UTC+5). В заголовках запросов Accept-Language: ru-KZ,….
+
+Пара замечаний про капчи (чтоб не терять время)
+
+Если после пресета всё ещё валится «Ray ID / VPN detected» или Яндекс шлёт капчу — это почти всегда репутация конкретного IP (дата-центр, общий выход или «прожаренный» пул). Софт уже делает «правильные» вещи; дальше решает качество/уникальность IP.
+
+На ChatGPT/Google особенно важно: согласованность UA/CH/TZ/Geo/Language и история/куки. Этот патч как раз убирает технические несоответствия; остаётся только вопрос «чистоты» IP.
+
+Хочешь Астану вместо Алма-Аты?
+
+В worker_chrome.py замени блок KZ_GEO на координаты Астаны (51.1801, 71.446) — будет имитация из столицы:
+
+KZ_GEO = {"latitude": 51.1801, "longitude": 71.446, "accuracy": 50}
+
+
+(время/зона останутся UTC+5, т.к. она единая по стране). 
+latitudelongitude.org
++1
+
+Если что-то пойдёт не так — пришли строку из logs/launcher.log и результат http://127.0.0.1:<debug_port>/json/version (порт пишется в лог), я докручу.Окей, сделаем так, чтобы ВСЁ нужное можно было выбрать прямо в «Редактировании профиля» — пресеты (KZ), язык/таймзона/гео, и чтобы это сохранилось в профиль и применялось на старте без костылей.
+
+Ниже — готовые патчи и файлы. Они:
+
+добавляют в форму «Редактирование» селектор пресета и чекбоксы (CDP-оверрайд, WebRTC через прокси);
+
+хранят выбор в профиле;
+
+при запуске применяют UA/Accept-Language/TZ/Geo через CDP + prefs (куки и всё остальное как раньше);
+
+ничего не ломают: pproxy-обёртка, сохранение кук, Self-Test остаются как есть.
+
+Что именно появится в UI (в «Редактирование профиля»)
+
+Пресет гео/языка: KZ — Almaty (ru-KZ) и KZ — Astana (ru-KZ) + Нет пресета.
+
+Чекбокс: «Применять UA/язык/TZ/гео через CDP».
+
+Чекбокс: «WebRTC только через прокси (отключить непроксированный UDP)».
+
+Поле «Язык (Accept-Language)» и «Часовой пояс (TZ)» остаются редактируемыми вручную (пресет просто подставляет значения).
+
+Всё сохраняется в профиль, работает на каждый запуск.
+
+КАК ПРИМЕНИТЬ
+
+Сохрани файлы/патчи в корень репо и выполни:
+
+git pull
+git apply --whitespace=fix ui_kz_presets.patch
+pip install -r requirements.txt
+
+1) requirements.txt (добавляем CDP WebSocket-клиент)
++websocket-client>=1.6
+
+2) ПАТЧ: ui_kz_presets.patch
+
+Этот diff предполагает, что редактор профиля создаётся в AiChrome.pyw
+(если у тебя другой файл для формы, вставь блок UI — вставка туда, где создаются поля User-Agent/Language/TZ).
+
+*** a/AiChrome.pyw
+--- b/AiChrome.pyw
+@@
+ import tkinter as tk
+ from tkinter import ttk, messagebox
+ import json, os
+@@
+ class ProfileEditor(tk.Toplevel):
+     def __init__(self, master, profile: dict, on_save):
+         super().__init__(master)
+         self.title("AiChrome — профиль")
+         self.profile = profile
+         self.on_save = on_save
+@@
+         # существующие поля:
+         # self.ua_var, self.lang_var, self.tz_var, self.os_var, и т.д.
+         # ...
+ 
++        # ---------- UI — вставка: пресеты и флаги антибот ----------
++        presets_frame = ttk.LabelFrame(self, text="Пресеты гео/языка и антибот")
++        presets_frame.grid(row=99, column=0, columnspan=3, sticky="ew", padx=8, pady=(8,4))
++
++        ttk.Label(presets_frame, text="Пресет:").grid(row=0, column=0, sticky="w")
++        self.preset_var = tk.StringVar(value=self.profile.get("preset", "none"))
++        self.preset_cb = ttk.Combobox(
++            presets_frame, textvariable=self.preset_var, state="readonly",
++            values=["none", "KZ_Almaty_ru", "KZ_Astana_ru"]
++        )
++        self.preset_cb.grid(row=0, column=1, sticky="ew", padx=(6,0))
++        presets_frame.columnconfigure(1, weight=1)
++
++        def apply_preset(ev=None):
++            p = self.preset_var.get()
++            if p == "KZ_Almaty_ru":
++                self.lang_var.set("ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7")
++                self.tz_var.set("Asia/Almaty")
++                # ОС и UA: под Chrome/Windows; если у тебя есть выпадашка ОС — поставь Windows
++                try: self.os_var.set("Windows")
++                except Exception: pass
++                if not self.ua_var.get() or "Chrome/" not in self.ua_var.get():
++                    self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
++                                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
++            elif p == "KZ_Astana_ru":
++                self.lang_var.set("ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7")
++                self.tz_var.set("Asia/Almaty")  # в Казахстане единый часовой пояс UTC+5
++                try: self.os_var.set("Windows")
++                except Exception: pass
++                if not self.ua_var.get() or "Chrome/" not in self.ua_var.get():
++                    self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
++                                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
++            else:
++                # none — не трогаем
++                pass
++        self.preset_cb.bind("<<ComboboxSelected>>", apply_preset)
++
++        self.cdp_var = tk.BooleanVar(value=bool(self.profile.get("apply_cdp_overrides", True)))
++        ttk.Checkbutton(
++            presets_frame, text="Применять UA/язык/TZ/гео через CDP",
++            variable=self.cdp_var
++        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6,0))
++
++        self.webrtc_var = tk.BooleanVar(value=bool(self.profile.get("force_webrtc_proxy", True)))
++        ttk.Checkbutton(
++            presets_frame, text="WebRTC только через прокси (без непроксированного UDP)",
++            variable=self.webrtc_var
++        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2,4))
++        # ---------- /UI — вставка ----------
++
+@@
+     def _save(self):
+         # собрать значения из полей в self.profile
+         self.profile["user_agent"] = self.ua_var.get().strip()
+         self.profile["accept_language"] = self.lang_var.get().strip()
+         self.profile["timezone"] = self.tz_var.get().strip()
++        self.profile["preset"] = self.preset_var.get()
++        self.profile["apply_cdp_overrides"] = bool(self.cdp_var.get())
++        self.profile["force_webrtc_proxy"] = bool(self.webrtc_var.get())
+         # ... плюс остальные поля (proxy, os, и т.п.)
+         self.on_save(self.profile)
+         self.destroy()
+
+3) ПАТЧ к worker_chrome.py — чтение этих флагов + применение через CDP
+*** a/worker_chrome.py
+--- b/worker_chrome.py
+@@
+-import os, sys, json, time, shutil, socket, subprocess, tempfile, logging, re
++import os, sys, json, time, shutil, socket, subprocess, tempfile, logging, re
+ from pathlib import Path
+ import requests
++from websocket import create_connection  # websocket-client
+ 
+ LOG = logging.getLogger("worker_chrome")
+ 
++# пресеты KZ (можно расширять)
++KZ_ACCEPT_LANGUAGE = "ru-KZ,ru;q=0.9,kk-KZ;q=0.8,en-US;q=0.7"
++KZ_TZ = "Asia/Almaty"
++KZ_ALMATY = {"latitude": 43.2567, "longitude": 76.9286, "accuracy": 50}
++KZ_ASTANA = {"latitude": 51.1801, "longitude": 71.4460, "accuracy": 50}
++
++def _pick_free_port():
++    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
++    s.bind(("127.0.0.1", 0))
++    port = s.getsockname()[1]
++    s.close()
++    return port
++
++def _chrome_major(chrome_path):
++    try:
++        ver = subprocess.check_output([chrome_path, "--version"], text=True).strip()
++        m = re.search(r"(\d+)\.", ver)
++        return m.group(1) if m else "120"
++    except Exception:
++        return "120"
++
++def _cdp(ws_url, method, params=None, _id=[0]):
++    import json as _json
++    _id[0] += 1
++    msg = {"id": _id[0], "method": method, "params": params or {}}
++    ws = create_connection(ws_url, timeout=5)
++    try:
++        ws.send(_json.dumps(msg))
++        while True:
++            resp = _json.loads(ws.recv())
++            if resp.get("id") == _id[0]:
++                if "error" in resp:
++                    raise RuntimeError(resp["error"])
++                return resp.get("result", {})
++    finally:
++        ws.close()
++
++def _apply_overrides(debug_port, chrome_path, profile):
++    """UA/Accept-Language/TZ/Geo через CDP, если включено в профиле."""
++    if not profile.get("apply_cdp_overrides", True):
++        return
++    ver = requests.get(f"http://127.0.0.1:{debug_port}/json/version", timeout=5).json()
++    ws_url = ver["webSocketDebuggerUrl"]
++    # базовые значения
++    ua = (profile.get("user_agent") or "").strip()
++    if "Chrome/" not in ua:
++        ua = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " \
++             f"Chrome/{_chrome_major(chrome_path)}.0.0.0 Safari/537.36"
++    lang = (profile.get("accept_language") or "").strip()
++    tz   = (profile.get("timezone") or "").strip()
++    geo  = None
++    # пресет, если выбран
++    preset = profile.get("preset", "none")
++    if preset == "KZ_Almaty_ru":
++        lang = lang or KZ_ACCEPT_LANGUAGE
++        tz   = tz or KZ_TZ
++        geo  = KZ_ALMATY
++    elif preset == "KZ_Astana_ru":
++        lang = lang or KZ_ACCEPT_LANGUAGE
++        tz   = tz or KZ_TZ
++        geo  = KZ_ASTANA
++    # CDP вызовы
++    _cdp(ws_url, "Emulation.setUserAgentOverride", {"userAgent": ua, "acceptLanguage": lang or "en-US"})
++    if tz:
++        _cdp(ws_url, "Emulation.setTimezoneOverride", {"timezoneId": tz})
++    if geo:
++        _cdp(ws_url, "Emulation.setGeolocationOverride", geo)
++
++def _ensure_webrtc_prefs(user_data_dir, enable=True):
++    """Эквивалент disable_non_proxied_udp — WebRTC только через прокси."""
++    if not enable:
++        return
++    pref = Path(user_data_dir) / "Default" / "Preferences"
++    pref.parent.mkdir(parents=True, exist_ok=True)
++    data = {}
++    if pref.exists():
++        try:
++            data = json.loads(pref.read_text(encoding="utf-8", errors="ignore") or "{}")
++        except Exception:
++            data = {}
++    w = data.setdefault("webrtc", {})
++    w["ip_handling_policy"] = "disable_non_proxied_udp"
++    w["multiple_routes_enabled"] = False
++    w["nonproxied_udp_enabled"] = False
++    pref.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+ 
+@@
+ def launch_chrome(profile, chrome_path, base_dir, *, force_pac=False):
+     user_data_dir = Path(base_dir) / "profiles" / str(profile["id"])
+     user_data_dir.mkdir(parents=True, exist_ok=True)
+-    args = [chrome_path, f"--user-data-dir={user_data_dir}", "--no-first-run", "--no-default-browser-check"]
++    debug_port = _pick_free_port()
++    args = [
++        chrome_path,
++        f"--user-data-dir={user_data_dir}",
++        "--no-first-run", "--no-default-browser-check",
++        f"--remote-debugging-port={debug_port}",
++    ]
+@@
+     # прокси через локальную обёртку уже сделан выше
+@@
+-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++    # WebRTC prefs — до старта
++    _ensure_webrtc_prefs(user_data_dir, enable=bool(profile.get("force_webrtc_proxy", True)))
++    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+     time.sleep(2)
+-    # CDP оверрайды можно применить здесь (язык/TZ/UA/гео)
+-    # ...
++    try:
++        _apply_overrides(debug_port, chrome_path, profile)
++    except Exception as e:
++        LOG.warning("CDP overrides failed: %s", e)
+     return proc
+
+Как этим пользоваться
+
+Открой «Редактировать профиль».
+
+В блоке «Пресеты гео/языка и антибот» выбери, например, KZ — Almaty (ru-KZ).
+Поля Язык и TZ подставятся; OS → Windows; если UA пуст/не Chrome — подставится Chrome-UA.
+
+Оставь галочки:
+
+Применять UA/язык/TZ/гео через CDP — включено (рекомендуется).
+
+WebRTC только через прокси — включено.
+
+Сохрани → Запустить.
+Проверка:
+
+chrome://version — UA = Chrome;
+
+https://httpbin.org/headers — Accept-Language: ru-KZ,…;
+
+new Date().getTimezoneOffset() ≈ -300;
+
+https://api.ipify.org?format=json — IP твоего прокси;
+
+https://browserleaks.com/webrtc — нет «голых» локальных IP.
+
+Важно про капчи / ChatGPT
+
+Эти настройки убирают рассинхроны и снижают риск, но если конкретный IP из пула «убит» (Cloudflare/Google/Яндекс), капчи/блоки останутся. Тогда просто меняй IP/провайдера (dedicated/residential/mobile KZ). Софт при этом будет запускать профили «как нужно», без диалогов и с консистентным отпечатком.

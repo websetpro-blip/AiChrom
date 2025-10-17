@@ -1,0 +1,314 @@
+Ок, теперь задача ясна: логин-диалог убрали, но Яндекс стабильно кидает на капчу. Это почти всегда комбинация «IP-репутация/шаред ДЦ-прокси + палёный отпечаток браузера (язык/таймзона/WebRTC/automation-флаги)». Ниже — что именно доделать в коде, и сразу готовый патч.
+
+Почему капча лезет (по фактам)
+
+Yandex запрашивает капчу при «подозрительном трафике» — много однотипных запросов, подозрительная сеть и т.п. (особенно с шаред/ДЦ-прокси). Это их оф. справка. 
+Yandex
+
+Chrome не принимает креды в --proxy-server → вы и пришли к обёртке. Это корректно (так и должно быть). 
+chromium.googlesource.com
++1
+
+navigator.webdriver= true при --enable-automation, --headless и т.п. — это легко детектят (многие антиботы повышают риск/капчу). Убедимся, что таких флагов не осталось. 
+developer.mozilla.org
+
+WebRTC может «подсветить» реальный/непрокси IP (STUN/UDP), что ломает консистентность с прокси → риск капчи. Лечится политикой disable_non_proxied_udp (без расширений — через Preferences/политику). 
+webrtcHacks
++1
+
+Шаред ДЦ-прокси часто имеет плохую репутацию → капчи ожидаемы даже при идеальном отпечатке. В идеале — дедикейт/резидент/мобайл, либо хотя бы KZ-локейшн под yandex.kz. 
+Infatica
++1
+
+Что доделать в софте (без расширений)
+
+WebRTC только через прокси
+Перед запуском Хрома записываем в профиль Preferences:
+
+"webrtc": {
+  "ip_handling_policy": "disable_non_proxied_udp",
+  "multiple_routes_enabled": false,
+  "nonproxied_udp_enabled": false
+}
+
+
+Это штатная политика: WebRTC не будет слать «непроксированный» UDP. 
+webrtcHacks
++1
+
+Язык/регион в профиль (и флаг --lang)
+Записываем intl.accept_languages (например, ru-RU,ru;q=0.9,en-US;q=0.8) и добавляем --lang=ru-RU. Для yandex.kz это снижает аномалии.
+
+Геолокацию блокируем на уровне профиля
+В Preferences → profile.default_content_setting_values.geolocation = 2 — чтобы не было рассинхрона «IP из US, гео-prompt от ОС — другое».
+
+Без «автоматизационных» флагов и тест-сборок
+Убедитесь, что НЕТ --enable-automation, --headless, --remote-debugging-port=0, «Chrome for Testing» и экспериментальных флагов типа --disable-site-isolation-trials. navigator.webdriver должен быть false. 
+developer.mozilla.org
+
+Хром — только Stable
+Это вы уже учли; держим приоритет Program Files.
+
+Важно: даже с идеальным отпечатком шаред ДЦ-IP часто останется в «зоне капч». Если критично — берите dedicated/residential (лучше mobile) KZ-диапазоны или хотя бы не-shared. 
+Infatica
+
+Готовый patch (добавляет WebRTC/язык/гео-префы и --lang)
+
+Сохраните как fingerprint-hardening.patch в корне и примените:
+
+git pull
+git apply fingerprint-hardening.patch
+
+diff --git a/worker_chrome.py b/worker_chrome.py
+index 7d8e9f0..9abc123 100644
+--- a/worker_chrome.py
++++ b/worker_chrome.py
+@@
+-import os
+-import sys
+-import atexit
+-import socket
+-import subprocess
+-import time
+-from pathlib import Path
++import os, sys, json, atexit, socket, subprocess, time
++from pathlib import Path
+@@
+ def launch_chrome_with_profile(profile, chrome_path, base_dir, *, force_pac=False):
+@@
+-    # 1) Персистентный профиль
++    # 1) Персистентный профиль (куки/LocalStorage сохраняются)
+     user_data_dir = Path(base_dir) / "profiles" / str(profile.id)
+     user_data_dir.mkdir(parents=True, exist_ok=True)
+     args += [
+         f"--user-data-dir={user_data_dir}",
+         "--no-first-run",
+         "--no-default-browser-check",
+     ]
++
++    # 1.1) Подготовка Preferences перед стартом (WebRTC/язык/гео)
++    def _ensure_preferences():
++        default_dir = user_data_dir / "Default"
++        default_dir.mkdir(parents=True, exist_ok=True)
++        prefs_path = default_dir / "Preferences"
++        prefs = {}
++        if prefs_path.exists():
++            try:
++                prefs = json.loads(prefs_path.read_text(encoding="utf-8", errors="ignore") or "{}")
++            except Exception:
++                prefs = {}
++        # WebRTC: только через прокси (без не-проксированного UDP)
++        prefs.setdefault("webrtc", {})
++        prefs["webrtc"]["ip_handling_policy"] = "disable_non_proxied_udp"
++        prefs["webrtc"]["multiple_routes_enabled"] = False
++        prefs["webrtc"]["nonproxied_udp_enabled"] = False
++        # Геолокация: блок
++        prefs.setdefault("profile", {}).setdefault("default_content_setting_values", {})
++        prefs["profile"]["default_content_setting_values"]["geolocation"] = 2
++        # Язык интерфейса/заголовка
++        accept_lang = (getattr(profile, "accept_language", "") or "ru-RU,ru;q=0.9,en-US;q=0.8").strip()
++        prefs.setdefault("intl", {})["accept_languages"] = accept_lang
++        # Запись
++        try:
++            prefs_path.write_text(json.dumps(prefs, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
++        except Exception:
++            pass
++
++    _ensure_preferences()
++
++    # 1.2) Флаг языка в командной строке (дублируем для консистентности)
++    accept_lang_flag = (getattr(profile, "accept_language", "") or "ru-RU").split(",")[0].strip()
++    if accept_lang_flag:
++        args.append(f"--lang={accept_lang_flag}")
+@@
+-    # 2) Прокси: БЕЗ расширений и БЕЗ окна логина
++    # 2) Прокси: БЕЗ расширений и БЕЗ окна логина (локальная обёртка уже реализована)
+     ptype = (getattr(profile, "proxy_type", "") or "http").lower()   # 'http'|'https'
+     phost = getattr(profile, "proxy_host", "")
+     pport = int(getattr(profile, "proxy_port", 0) or 0)
+     puser = (getattr(profile, "proxy_user", "") or "").strip()
+     ppass = (getattr(profile, "proxy_pass", "") or "").strip()
+@@
+     # 3) запуск
+     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+@@
+     return proc
+diff --git a/requirements.txt b/requirements.txt
+index 2f1c5cd..2f1c5cd 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@
+ pproxy>=2.7
++# json встроен — внешних зависимостей для настроек не требуется
+
+
+Что делает патч
+
+Перед стартом создаёт/обновляет profiles/<id>/Default/Preferences с:
+
+webrtc.disable_non_proxied_udp и сопутствующими — нет WebRTC-утечек в обход прокси. 
+webrtcHacks
+
+intl.accept_languages — корректный Accept-Language.
+
+geolocation = blocked — чтобы IP и гео не «ссорились».
+
+Добавляет --lang=<…> к команде запуска.
+
+Остальная ваша прокси-обёртка (pproxy на 127.0.0.1) остаётся без изменений.
+
+Чек-лист проверки (5 минут)
+
+Запусти профиль → chrome://version
+Profile Path = …/profiles/<id>; Command Line содержит --lang=ru-RU.
+
+chrome://net-internals/#proxy → должен быть http://127.0.0.1:<порт>.
+
+https://browserleaks.com/webrtc или https://diafygi.github.io/webrtc-ips/ → нет внешнего IP вне прокси (UDP отрублен/через прокси). 
+webrtcHacks
+
+Зайти на yandex.kz → шанс капчи резко падает. Если всё ещё есть — это IP-репутация шаред-ДЦ-прокси: берите dedicated/residential/mobile (KZ) или смените пул (это не лечится кодом). 
+Infatica
+
+Если нужно ещё «дожать»
+
+В UI синхронизируйте TZ/язык/OS с гео прокси (для KZ — Asia/Almaty, ru-RU/kk-KZ). Мismatch — частый триггер.
+
+Убедитесь, что нигде не добавляются флаги --enable-automation/--headless/--remote-debugging-port=0 (они выставляют navigator.webdriver=true). 
+developer.mozilla.org
+
+Делайте «прогрев» профиля: первая вкладка — нейтральный сайт, пауза, потом поиск. Резкие запросы с нового профиля тоже триггерят антиботы. 
+docs.proxymesh.com
+
+Если хочешь — подготовлю второй маленький патч в README с этим чек-листом и добавлю явный вызов shutdown_proxy_wrapper(profile_id) в месте «Стоп профиля» (сейчас обёртка и так прибирается через atexit).Ок, теперь понятно: логин-окно мы убрали (обёртка pproxy работает), но Яндекс/Google/ChatGPT всё равно пинают в капчи/доп.проверки. Это уже не «не применились настройки», а репутация IP + отпечаток браузера. Ниже — что именно добить в коде AiChrom и что поменять по инфраструктуре, чтобы это приблизить к Indigo/Dolphin.
+
+Почему ловите капчу (по факту)
+
+ChatGPT доступен в KZ, но OpenAI может резать доступ по «подозрительным» IP (VPN/анонимайзеры/высокорисковые диапазоны). Для таких случаев они прямо советуют отключить VPN/сменить сеть; блок приходит через Cloudflare. 
+OpenAI Help Center
++2
+OpenAI Help Center
++2
+
+Google в этом году начал шире катить QR-верификацию вместо SMS и усилил риск-профиль при создании аккаунтов — отсюда «сканируйте QR», «это число нельзя использовать», «unusual activity». Это нормальный, риск-триггерный флоу, а не баг софта. 
+The Verge
+
+Yandex SmartCaptcha появляется при «похожем на автоматизацию» трафике и/или плохой репутации подсети — типично для шареных DC прокси. (Документация у Яндекса это описывает; поведение совпадает.)
+
+Вывод: софт уже гонит трафик через ваш прокси без логин-диалога; дальше решают (а) IP-класс и (б) консистентность отпечатка. Ниже — конкретные правки.
+
+Патч в AiChrom (минимум, без расширений)
+
+Цель — убрать «детект» по сети/фингерпринту: запрет непроксированного WebRTC-UDP, согласованный язык/регион, запрет геолокации, без automation-флагов.
+
+Что делает патч:
+
+Перед стартом правит profiles/<id>/Default/Preferences:
+
+webrtc.ip_handling_policy = "disable_non_proxied_udp", multiple_routes_enabled=false, nonproxied_udp_enabled=false — WebRTC не «светит» IP в обход прокси. 
+instinctive.app
+
+profile.default_content_setting_values.geolocation = 2 — блочим гео-промпт, чтобы IP и гео не конфликтовали.
+
+intl.accept_languages = "ru-RU,ru;q=0.9,en-US;q=0.8".
+
+Добавляет --lang=ru-RU в команду запуска.
+
+Не добавляет никаких --enable-automation/--headless (оставьте отключёнными — это флаги-триггеры).
+
+diff (сохраните как fingerprint-hardening.patch и примените git apply fingerprint-hardening.patch):
+
+diff --git a/worker_chrome.py b/worker_chrome.py
+index 7d8e9f0..9abc123 100644
+--- a/worker_chrome.py
++++ b/worker_chrome.py
+@@
+-import os
+-import sys
+-import atexit
+-import socket
+-import subprocess
+-import time
+-from pathlib import Path
++import os, sys, json, atexit, socket, subprocess, time
++from pathlib import Path
+@@
+     user_data_dir = Path(base_dir) / "profiles" / str(profile.id)
+     user_data_dir.mkdir(parents=True, exist_ok=True)
+     args += [
+         f"--user-data-dir={user_data_dir}",
+         "--no-first-run",
+         "--no-default-browser-check",
+     ]
++
++    # Preferences: WebRTC только через прокси, гео запрет, язык
++    def _ensure_preferences():
++        default_dir = user_data_dir / "Default"
++        default_dir.mkdir(parents=True, exist_ok=True)
++        prefs_path = default_dir / "Preferences"
++        prefs = {}
++        if prefs_path.exists():
++            try:
++                prefs = json.loads(prefs_path.read_text(encoding="utf-8", errors="ignore") or "{}")
++            except Exception:
++                prefs = {}
++        prefs.setdefault("webrtc", {})
++        prefs["webrtc"]["ip_handling_policy"] = "disable_non_proxied_udp"
++        prefs["webrtc"]["multiple_routes_enabled"] = False
++        prefs["webrtc"]["nonproxied_udp_enabled"] = False
++        prefs.setdefault("profile", {}).setdefault("default_content_setting_values", {})
++        prefs["profile"]["default_content_setting_values"]["geolocation"] = 2
++        accept_lang = (getattr(profile, "accept_language", "") or "ru-RU,ru;q=0.9,en-US;q=0.8").strip()
++        prefs.setdefault("intl", {})["accept_languages"] = accept_lang
++        try:
++            prefs_path.write_text(json.dumps(prefs, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
++        except Exception:
++            pass
++    _ensure_preferences()
++
++    # Дублируем язык флагом — консистентность заголовков/интерфейса
++    accept_lang_flag = (getattr(profile, "accept_language", "") or "ru-RU").split(",")[0].strip()
++    if accept_lang_flag:
++        args.append(f"--lang={accept_lang_flag}")
+
+
+(pproxy и --user-data-dir вы уже внедрили — оставляем как есть.)
+
+Что поменять по прокси (иначе капчи не уйдут)
+
+Уйти от shared DC-прокси. Для Яндекса/Google/ChatGPT shared-диапазоны часто «подсвечены» → капчи даже при идеальном отпечатке. Нужны dedicated/residential/mobile, лучше KZ-гео под yandex.kz/chatgpt. У OpenAI KZ — в списке поддерживаемых стран, но Cloudflare может блочить анонимайзеры/VPN. 
+OpenAI Help Center
++1
+
+Стабильно один профиль ↔ один IP. Частая смена подсетей = risk score растёт.
+
+Прогрев профиля: первая сессия — нейтральные сайты, не бейте сразу поиском/регой. (Да, это влияет.)
+
+Чек-лист проверки (быстро)
+
+В запущенном профиле:
+chrome://version → есть --lang=ru-RU, Profile Path = ваш profiles/<id>.
+chrome://net-internals/#proxy → стоит http://127.0.0.1:<порт> (ваш wrapper).
+https://api.ipify.org?format=json → внешний IP = IP вашего апстрима.
+https://browserleaks.com/webrtc → нет «утечки» WAN-IP (UDP отключён). Политика disable_non_proxied_udp валидна для Chrome 91+. 
+instinctive.app
+
+ChatGPT: если видите «подозрительный логин»/«blocked» — это именно сетевой риск; OpenAI прямо советует отключать VPN/менять сеть. 
+OpenAI Help Center
++1
+
+Google-регистрация с QR-подтверждением — это новая норма, а не ваш баг. Они уходят от SMS; при «риск-сигналах» QR/доп.проверки обязательны. 
+The Verge
+
+Если хочешь ещё «дожать» под Indigo/Dolphin
+
+В UI профиля ставьте Accept-Language/TZ/OS под гео прокси (для KZ — ru-RU и Asia/Almaty).
+
+Исключите любые флаги автоматизации (ни --enable-automation, ни --headless). Это отдельный триггер. 
+OpenAI Help Center
+
+При необходимости добавим авто-Self-Test (кнопка открывает ipify + browserleaks, пишет verdict в лог).
+
+Итог
+
+Технически ваш запуск теперь корректный: прокси авторизуется без диалога, профиль персистентный, настройки применяются. Капчи идут не из-за запуска, а из-за IP-репутации и поведенческих маркеров. Примените патч выше (WebRTC/язык/гео), а по инфраструктуре — смените тип прокси на dedicated/residential/mobile KZ и не прыгайте между подсетями — это и есть разница, почему Indigo/Dolphin «чисто» проходят при тех же сайтах.

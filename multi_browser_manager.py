@@ -303,6 +303,15 @@ class ProfileDialog:
         )
         self.lab_frame.pack(fill="both", expand=True, padx=6, pady=6)
 
+        # Кнопки пресетов
+        preset_frame = ttk.Frame(parent)
+        preset_frame.pack(fill="x", padx=6, pady=(8, 0))
+        
+        ttk.Button(preset_frame, text="🇰🇿 Казахстан", command=self.apply_kazakhstan_preset).pack(side="left", padx=(0, 6))
+        ttk.Button(preset_frame, text="🇺🇸 США", command=self.apply_usa_preset).pack(side="left", padx=(0, 6))
+        ttk.Button(preset_frame, text="🇷🇺 Россия", command=self.apply_russia_preset).pack(side="left", padx=(0, 6))
+        ttk.Button(preset_frame, text="🇩🇪 Германия", command=self.apply_germany_preset).pack(side="left", padx=(0, 6))
+        
         ttk.Button(parent, text="🎲 Случайные настройки", command=self.generate_random_profile).pack(fill="x", padx=6, pady=(8, 0))
 
         def _sync_lab(*_):
@@ -554,6 +563,42 @@ class ProfileDialog:
         self.generate_random_language()
         self.os_var.set(random.choice(["Windows", "macOS", "Linux"]))
         self.tags_var.set("")
+
+    def apply_kazakhstan_preset(self) -> None:
+        """Применяет пресет для Казахстана"""
+        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
+        self.lang_var.set("ru-RU,ru;q=0.9,en;q=0.8")
+        self.tz_var.set("Asia/Almaty")
+        self.country_var.set("KZ")
+        self.scheme_var.set("http")
+        self.tags_var.set("kazakhstan")
+
+    def apply_usa_preset(self) -> None:
+        """Применяет пресет для США"""
+        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
+        self.lang_var.set("en-US,en;q=0.9")
+        self.tz_var.set("America/New_York")
+        self.country_var.set("US")
+        self.scheme_var.set("http")
+        self.tags_var.set("usa")
+
+    def apply_russia_preset(self) -> None:
+        """Применяет пресет для России"""
+        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
+        self.lang_var.set("ru-RU,ru;q=0.9,en;q=0.8")
+        self.tz_var.set("Europe/Moscow")
+        self.country_var.set("RU")
+        self.scheme_var.set("http")
+        self.tags_var.set("russia")
+
+    def apply_germany_preset(self) -> None:
+        """Применяет пресет для Германии"""
+        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
+        self.lang_var.set("de-DE,de;q=0.9,en;q=0.8")
+        self.tz_var.set("Europe/Berlin")
+        self.country_var.set("DE")
+        self.scheme_var.set("http")
+        self.tags_var.set("germany")
 
 
 
