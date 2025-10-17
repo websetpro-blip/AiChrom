@@ -150,7 +150,11 @@ def _start_local_proxy_wrapper(
     if scheme_lower == "https":
         candidates.append(f"http+ssl://{host}:{port}#{user}:{password}")
     if user and password:
-        candidates.append(f"http://{user}:{password}@{host}:{port}")
+        # Экранируем URL для pproxy
+        import urllib.parse
+        user_escaped = urllib.parse.quote(user, safe='')
+        password_escaped = urllib.parse.quote(password, safe='')
+        candidates.append(f"http://{user_escaped}:{password_escaped}@{host}:{port}")
     else:
         candidates.append(f"http://{host}:{port}")
 
@@ -542,7 +546,7 @@ def launch_chrome(
             args.extend(extra_flags)
 
         _apply_profile_preferences(
-            profile_dir,
+            user_data_dir,
             accept_language=accept_language,
             force_webrtc=force_webrtc_proxy,
         )
