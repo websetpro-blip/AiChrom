@@ -170,7 +170,9 @@ class ProfileDialog:
 
         self.top = tk.Toplevel(master)
         self.top.title("AiChrome — профиль")
-        self.top.geometry("700x900")
+        self.top.geometry("800x700")
+        self.top.minsize(700, 600)
+        self.top.maxsize(1000, 800)
         self.top.transient(master)
         self.top.grab_set()
         self.top.resizable(True, True)
@@ -183,7 +185,23 @@ class ProfileDialog:
         except Exception:
             pass
 
-        container = ttk.Frame(self.top, padding=12)
+        # Создаем прокручиваемый контейнер
+        canvas = tk.Canvas(self.top)
+        scrollbar = ttk.Scrollbar(self.top, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        container = ttk.Frame(scrollable_frame, padding=12)
         container.pack(fill="both", expand=True)
 
         self._build_form(container)
@@ -344,7 +362,7 @@ class ProfileDialog:
         ttk.Entry(row, textvariable=self.password_var, show="*", width=24).pack(side="left", padx=(6,0))
 
         notebook = ttk.Notebook(parent)
-        notebook.pack(fill="both", expand=True, pady=(12, 0))
+        notebook.pack(fill="x", pady=(12, 0))
 
         proxy_tab = ttk.Frame(notebook)
         notebook.add(proxy_tab, text="Прокси")
@@ -369,7 +387,7 @@ class ProfileDialog:
             scheme_getter=lambda: self.proxy_type_var.get(),
             country_getter=lambda: self.country_var.get(),
         )
-        self.lab_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self.lab_frame.pack(fill="x", padx=6, pady=6)
 
         ttk.Button(parent, text="🎲 Случайные настройки", command=self.generate_random_profile).pack(fill="x", padx=6, pady=(8, 0))
 
@@ -704,7 +722,8 @@ class BrowserManagerApp:
         else:
             self.root = tk.Tk()
         self.root.title("AiChrome — менеджер профилей")
-        self.root.geometry("960x640")
+        self.root.geometry("1200x800")
+        self.root.minsize(1000, 600)
         
         # Устанавливаем иконку приложения
         try:
@@ -723,6 +742,11 @@ class BrowserManagerApp:
         self._build_ui()
         self._refresh_tree()
         self._start_status_timer()
+        
+        # Принудительно обновляем отображение
+        self.root.update()
+        self.root.lift()
+        self.root.focus_force()
 
     def _build_ui(self) -> None:
         toolbar = ttk.LabelFrame(self.root, text="Панель инструментов", padding=10)
@@ -730,16 +754,24 @@ class BrowserManagerApp:
         # Делаем toolbar более заметным
         toolbar.configure(relief="raised", borderwidth=1)
 
-        ttk.Button(toolbar, text="Создать", command=self.create_profile).pack(side="left")
-        ttk.Button(toolbar, text="Редактировать", command=self.edit_profile).pack(side="left", padx=(6, 0))
-        ttk.Button(toolbar, text="Клонировать", command=self.clone_profile).pack(side="left", padx=(6, 0))
-        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=8)
-        ttk.Button(toolbar, text="Автопрокси", command=self.autoproxy_selected).pack(side="left")
-        ttk.Button(toolbar, text="Self-Test", command=self.self_test_selected).pack(side="left", padx=(6, 0))
-        ttk.Button(toolbar, text="Запустить", command=self.launch_selected).pack(side="left", padx=(6, 0))
-        ttk.Button(toolbar, text="Установить рабочий Chrome", command=self.install_worker_chrome).pack(side="left", padx=(6, 0))
-        ttk.Button(toolbar, text="Обновить", command=self.reload_profiles).pack(side="left", padx=(6, 0))
-        ttk.Button(toolbar, text="Удалить", command=self.delete_profile).pack(side="right")
+        # Основные кнопки
+        ttk.Button(toolbar, text="Создать", command=self.create_profile, width=12).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar, text="Редактировать", command=self.edit_profile, width=12).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar, text="Клонировать", command=self.clone_profile, width=12).pack(side="left", padx=(0, 5))
+        
+        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
+        
+        # Кнопки действий
+        ttk.Button(toolbar, text="Автопрокси", command=self.autoproxy_selected, width=12).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar, text="Self-Test", command=self.self_test_selected, width=12).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar, text="Запустить", command=self.launch_selected, width=12).pack(side="left", padx=(0, 5))
+        
+        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=10)
+        
+        # Кнопки управления
+        ttk.Button(toolbar, text="Установить Chrome", command=self.install_worker_chrome, width=15).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar, text="Обновить", command=self.reload_profiles, width=12).pack(side="left", padx=(0, 5))
+        ttk.Button(toolbar, text="Удалить", command=self.delete_profile, width=12).pack(side="right", padx=(5, 0))
 
         columns = ("name", "status", "tags", "os", "proxy", "created", "last_used")
         self.tree = ttk.Treeview(self.root, columns=columns, show="headings", height=18)
