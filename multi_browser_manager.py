@@ -306,45 +306,52 @@ class ProfileDialog:
         self._attach_context_menu(_sh_entry)
         ttk.Button(res_row, text="Случайное", command=self.generate_random_resolution).pack(side="left", padx=(6, 0))
 
+        # ---------- ПРОКСИ ----------
+        proxy_frame = ttk.LabelFrame(parent, text="Прокси")
+        proxy_frame.pack(fill="x", padx=8, pady=(10, 6))
+
+        # переменные, чтобы пресеты и сохранение не падали
+        self.proxy_type_var = tk.StringVar(value="http")
+        self.country_var = tk.StringVar(value="US")  # для пресетов
+        self.host_var = tk.StringVar()
+        self.port_var = tk.StringVar()
+        self.login_var = tk.StringVar()
+        self.password_var = tk.StringVar()
+
+        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Тип (http/https/socks5/socks4):", width=28).pack(side="left")
+        ttk.Combobox(row, textvariable=self.proxy_type_var, state="readonly",
+                     values=["http","https","socks5","socks4"], width=12).pack(side="left", padx=(6,0))
+
+        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Страна (ISO):", width=28).pack(side="left")
+        ttk.Entry(row, textvariable=self.country_var, width=8).pack(side="left", padx=(6,0))
+
+        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Хост:", width=28).pack(side="left")
+        ttk.Entry(row, textvariable=self.host_var, width=28).pack(side="left", padx=(6,0))
+
+        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Порт:", width=28).pack(side="left")
+        ttk.Entry(row, textvariable=self.port_var, width=10).pack(side="left", padx=(6,0))
+
+        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Логин:", width=28).pack(side="left")
+        ttk.Entry(row, textvariable=self.login_var, width=24).pack(side="left", padx=(6,0))
+
+        row = ttk.Frame(proxy_frame); row.pack(fill="x", padx=6, pady=3)
+        ttk.Label(row, text="Пароль:", width=28).pack(side="left")
+        ttk.Entry(row, textvariable=self.password_var, show="*", width=24).pack(side="left", padx=(6,0))
+
         notebook = ttk.Notebook(parent)
         notebook.pack(fill="both", expand=True, pady=(12, 0))
 
         proxy_tab = ttk.Frame(notebook)
         notebook.add(proxy_tab, text="Прокси")
 
-        ttk.Label(proxy_tab, text="Тип (http/socks4/socks5):").grid(row=0, column=0, sticky="w")
-        self.scheme_var = tk.StringVar(value="http")
-        ttk.Combobox(proxy_tab, textvariable=self.scheme_var, values=("http", "socks4", "socks5"), state="readonly").grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        # Прокси поля теперь в основном блоке выше
 
-        ttk.Label(proxy_tab, text="Страна (ISO)").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.country_var = tk.StringVar(value="US")
-        _country_entry = ttk.Entry(proxy_tab, textvariable=self.country_var)
-        _country_entry.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        self._attach_context_menu(_country_entry)
-
-        ttk.Label(proxy_tab, text="Хост").grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.host_var = tk.StringVar()
-        _host_entry = ttk.Entry(proxy_tab, textvariable=self.host_var)
-        _host_entry.grid(row=2, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        self._attach_context_menu(_host_entry)
-
-        ttk.Label(proxy_tab, text="Порт").grid(row=3, column=0, sticky="w", pady=(6, 0))
-        self.port_var = tk.StringVar()
-        _port_entry = ttk.Entry(proxy_tab, textvariable=self.port_var)
-        _port_entry.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        self._attach_context_menu(_port_entry)
-
-        ttk.Label(proxy_tab, text="Логин").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        self.user_var = tk.StringVar()
-        _user_entry = ttk.Entry(proxy_tab, textvariable=self.user_var)
-        _user_entry.grid(row=4, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        self._attach_context_menu(_user_entry)
-
-        ttk.Label(proxy_tab, text="Пароль").grid(row=5, column=0, sticky="w", pady=(6, 0))
-        self.pass_var = tk.StringVar()
-        _pass_entry = ttk.Entry(proxy_tab, textvariable=self.pass_var, show="*")
-        _pass_entry.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        self._attach_context_menu(_pass_entry)
+        # Пароль теперь в основном блоке прокси выше
 
         proxy_tab.columnconfigure(1, weight=1)
         main.columnconfigure(1, weight=1)
@@ -359,7 +366,7 @@ class ProfileDialog:
         self.lab_frame = ProxyLabFrame(
             lab_tab,
             apply_callback=self._apply_proxy_from_lab,
-            scheme_getter=lambda: self.scheme_var.get(),
+            scheme_getter=lambda: self.proxy_type_var.get(),
             country_getter=lambda: self.country_var.get(),
         )
         self.lab_frame.pack(fill="both", expand=True, padx=6, pady=6)
@@ -367,10 +374,10 @@ class ProfileDialog:
         ttk.Button(parent, text="🎲 Случайные настройки", command=self.generate_random_profile).pack(fill="x", padx=6, pady=(8, 0))
 
         def _sync_lab(*_):
-            self.lab_frame.sync_with_parent(self.scheme_var.get(), self.country_var.get())
+            self.lab_frame.sync_with_parent(self.proxy_type_var.get(), self.country_var.get())
 
         _sync_lab()
-        self.scheme_var.trace_add("write", _sync_lab)
+        self.proxy_type_var.trace_add("write", _sync_lab)
         self.country_var.trace_add("write", _sync_lab)
 
     # ---------------------------------------------------------------
@@ -485,12 +492,12 @@ class ProfileDialog:
                 self.profile.timezone = self.tz_var.get().strip()
                 self.profile.screen_width = int(self.screen_width_var.get() or "1920")
                 self.profile.screen_height = int(self.screen_height_var.get() or "1080")
-                self.profile.proxy_scheme = self.scheme_var.get()
+                self.profile.proxy_scheme = self.proxy_type_var.get()
                 self.profile.proxy_country = self.country_var.get().strip()
                 self.profile.proxy_host = self.host_var.get().strip()
                 self.profile.proxy_port = int(self.port_var.get()) if self.port_var.get().strip() else None
-                self.profile.proxy_username = self.user_var.get().strip()
-                self.profile.proxy_password = self.pass_var.get().strip()
+                self.profile.proxy_username = self.login_var.get().strip()
+                self.profile.proxy_password = self.password_var.get().strip()
                 self.profile.tags = self.tags_var.get().strip()
                 self.profile.os_name = self.os_var.get().strip() or "Windows"
                 self.profile.preset = self._preset_key
@@ -511,12 +518,12 @@ class ProfileDialog:
                     force_webrtc_proxy=bool(self.webrtc_var.get()),
                     screen_width=int(self.screen_width_var.get() or "1920"),
                     screen_height=int(self.screen_height_var.get() or "1080"),
-                    proxy_scheme=self.scheme_var.get(),
+                    proxy_scheme=self.proxy_type_var.get(),
                     proxy_country=self.country_var.get().strip(),
                     proxy_host=self.host_var.get().strip(),
                     proxy_port=int(self.port_var.get()) if self.port_var.get().strip() else None,
-                    proxy_username=self.user_var.get().strip(),
-                    proxy_password=self.pass_var.get().strip(),
+                    proxy_username=self.login_var.get().strip(),
+                    proxy_password=self.password_var.get().strip(),
                     tags=self.tags_var.get().strip(),
                     os_name=self.os_var.get().strip() or "Windows",
                     created=datetime.now().isoformat(),
@@ -538,7 +545,7 @@ class ProfileDialog:
         self.ua_var.set(profile.user_agent)
         self.lang_var.set(profile.language)
         self.tz_var.set(profile.timezone)
-        self.scheme_var.set((profile.proxy_scheme or "http").lower())
+        self.proxy_type_var.set((profile.proxy_scheme or "http").lower())
         if profile.proxy_country:
             self.country_var.set(profile.proxy_country)
         if profile.proxy_host:
@@ -546,9 +553,9 @@ class ProfileDialog:
         if profile.proxy_port:
             self.port_var.set(str(profile.proxy_port))
         if profile.proxy_username:
-            self.user_var.set(profile.proxy_username)
+            self.login_var.set(profile.proxy_username)
         if profile.proxy_password:
-            self.pass_var.set(profile.proxy_password)
+            self.password_var.set(profile.proxy_password)
         self.screen_width_var.set(str(profile.screen_width))
         self.screen_height_var.set(str(profile.screen_height))
         self.os_var.set(profile.os_name or "Windows")
@@ -561,27 +568,27 @@ class ProfileDialog:
             self.webrtc_var.set(bool(profile.force_webrtc_proxy))
 
     def _apply_proxy_from_lab(self, proxy: Proxy, result: Optional[ValidationResult]) -> None:
-        self.scheme_var.set(proxy.scheme.lower())
+        self.proxy_type_var.set(proxy.scheme.lower())
         self.host_var.set(proxy.host)
         self.port_var.set(str(proxy.port))
-        self.user_var.set(proxy.username or "")
-        self.pass_var.set(proxy.password or "")
+        self.login_var.set(proxy.username or "")
+        self.password_var.set(proxy.password or "")
         if result and result.cc:
             self.country_var.set(result.cc)
         elif proxy.country:
             self.country_var.set(proxy.country)
-        self.lab_frame.sync_with_parent(self.scheme_var.get(), self.country_var.get())
+        self.lab_frame.sync_with_parent(self.proxy_type_var.get(), self.country_var.get())
 
     def _lab_auto_best(self) -> None:
         try:
-            self.lab_frame.sync_with_parent(self.scheme_var.get(), self.country_var.get())
+            self.lab_frame.sync_with_parent(self.proxy_type_var.get(), self.country_var.get())
             self.lab_frame.auto_pick_best()
         except Exception as e:
             messagebox.showerror("AiChrome", f"Ошибка автопрокси: {e}")
 
     def _lab_auto_next(self) -> None:
         try:
-            self.lab_frame.sync_with_parent(self.scheme_var.get(), self.country_var.get())
+            self.lab_frame.sync_with_parent(self.proxy_type_var.get(), self.country_var.get())
             self.lab_frame.auto_pick_next()
         except Exception as e:
             messagebox.showerror("AiChrome", f"Ошибка следующего прокси: {e}")
@@ -643,7 +650,7 @@ class ProfileDialog:
         tags = cfg.get("tags")
         if tags is not None:
             self.tags_var.set(str(tags))
-        self.scheme_var.set("http")
+        self.proxy_type_var.set("http")
         self.cdp_var.set(True)
         self.webrtc_var.set(True)
 
@@ -663,6 +670,20 @@ class ProfileDialog:
             self._set_preset("none", apply_fields=False)
         if hasattr(self, "cdp_var"): self.cdp_var.set(True)
         if hasattr(self, "webrtc_var"): self.webrtc_var.set(True)
+
+    def generate_random_resolution(self) -> None:
+        """Генерирует случайное разрешение экрана"""
+        import random
+        # Набор «человеческих» разрешений
+        pool = [
+            (1366, 768), (1440, 900), (1536, 864),
+            (1600, 900), (1920, 1080), (1920, 1200),
+            (2560, 1440), (2560, 1600), (2880, 1800),
+            (3440, 1440)
+        ]
+        w, h = random.choice(pool)
+        self.screen_width_var.set(str(w))
+        self.screen_height_var.set(str(h))
 
     def apply_kazakhstan_preset(self) -> None:
         self._set_preset("kz_almaty", apply_fields=True)
