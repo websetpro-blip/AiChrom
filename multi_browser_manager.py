@@ -725,8 +725,10 @@ class BrowserManagerApp:
         self._start_status_timer()
 
     def _build_ui(self) -> None:
-        toolbar = ttk.Frame(self.root, padding=10)
-        toolbar.pack(fill="x")
+        toolbar = ttk.LabelFrame(self.root, text="Панель инструментов", padding=10)
+        toolbar.pack(fill="x", side="top", pady=(0, 10))
+        # Делаем toolbar более заметным
+        toolbar.configure(relief="raised", borderwidth=1)
 
         ttk.Button(toolbar, text="Создать", command=self.create_profile).pack(side="left")
         ttk.Button(toolbar, text="Редактировать", command=self.edit_profile).pack(side="left", padx=(6, 0))
