@@ -150,8 +150,8 @@ def _start_local_proxy_wrapper(
     if scheme_lower == "https":
         candidates.append(f"http+ssl://{host}:{port}#{user}:{password}")
     if user and password:
-        # Используем правильный синтаксис для pproxy
-        candidates.append(f"http://{user}:{password}@{host}:{port}")
+        # Используем правильный синтаксис для pproxy с # для аутентификации
+        candidates.append(f"http://{host}:{port}#{user}:{password}")
     else:
         candidates.append(f"http://{host}:{port}")
 
@@ -561,7 +561,15 @@ def launch_chrome(
             "\n  ".join(args),
         )
         proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-        lock.update_pid(proc.pid)
+        
+        # перезаписываем lock PID'ом Chrome, не питона-лаунчера — удобнее проверять
+        try:
+            import json
+            import time
+            lock_data = {"ts": time.time(), "chrome_pid": proc.pid}
+            _lock_path_for(user_data_dir).write_text(json.dumps(lock_data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
         
         # Ждем пока Chrome запустится и CDP станет доступен
         time.sleep(3)
