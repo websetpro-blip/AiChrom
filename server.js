@@ -14,7 +14,7 @@ app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (req, res) => res.json({ ok: true, service: "BrowserVault", cwd: ROOT }));
 
-// ===== Playwright: Р·Р°РїСѓСЃРє/СЃС‚РѕРї РїСЂРѕС„РёР»РµР№ =====
+// ===== Playwright: запуск/стоп профилей =====
 const contexts = new Map(); // id -> PersistentContext
 function normProxy(p){
   if (!p || !p.server) return null;
@@ -73,7 +73,7 @@ app.post("/api/stop", async (req, res) => {
   }
 });
 
-// ===== РЎС‚Р°С‚РёРєР° UI =====
+// ===== Статика UI =====
 app.use(express.static(ROOT, { extensions: ["html"] }));
 app.get("/", (req, res) => res.sendFile(path.join(ROOT, "index.html")));
 

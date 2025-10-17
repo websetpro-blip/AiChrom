@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import json
 import os
@@ -23,6 +24,13 @@ from tools.logging_setup import app_root, get_logger
 from ui.proxy_lab import ProxyLabFrame
 from worker_chrome import launch_chrome, ensure_worker_chrome, detect_worker_chrome
 from tools.lock_manager import ProfileLock
+from aichrom.presets import (
+    GEO_PRESETS,
+    PRESET_LABEL_BY_KEY,
+    PRESET_LABEL_LIST,
+    PRESET_KEY_BY_LABEL,
+    label_by_key,
+)
 
 
 log = get_logger(__name__)
@@ -47,6 +55,9 @@ class Profile:
     user_agent: str
     language: str
     timezone: str
+    preset: str = "none"
+    apply_cdp_overrides: bool = True
+    force_webrtc_proxy: bool = True
     proxy_scheme: str = "http"
     proxy_host: Optional[str] = None
     proxy_port: Optional[int] = None
@@ -89,6 +100,17 @@ class Profile:
         os_name = payload.get("os_name")
         if not isinstance(os_name, str) or not os_name.strip():
             payload["os_name"] = "Windows"
+        preset_val = payload.get("preset")
+        if not isinstance(preset_val, str) or not preset_val.strip():
+            payload["preset"] = "none"
+        else:
+            payload["preset"] = preset_val.strip()
+        for key in ("apply_cdp_overrides", "force_webrtc_proxy"):
+            value = payload.get(key)
+            if value is None:
+                payload[key] = True
+            else:
+                payload[key] = bool(value)
         return cls(**payload)
 
     def to_proxy(self) -> Optional[Proxy]:
@@ -214,6 +236,45 @@ class ProfileDialog:
         self._attach_context_menu(_tz_entry)
         ttk.Button(tz_row, text="Случайный", command=self.generate_random_timezone).pack(side="left", padx=(6, 0))
 
+        presets_frame = ttk.LabelFrame(parent, text="Geo/Language preset", padding=10)
+        presets_frame.pack(fill="x", pady=(12, 0))
+        initial_preset_key = (self.profile.preset if self.profile else "none") or "none"
+        if initial_preset_key not in GEO_PRESETS:
+            initial_preset_key = "none"
+        self._preset_key = initial_preset_key
+        initial_label = PRESET_LABEL_BY_KEY.get(initial_preset_key, PRESET_LABEL_LIST[0])
+        self.preset_label_var = tk.StringVar(value=initial_label)
+        ttk.Label(presets_frame, text="Preset:").grid(row=0, column=0, sticky="w")
+        self.preset_cb = ttk.Combobox(
+            presets_frame,
+            textvariable=self.preset_label_var,
+            values=PRESET_LABEL_LIST,
+            state="readonly",
+        )
+        self.preset_cb.grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        presets_frame.columnconfigure(1, weight=1)
+
+        self.cdp_var = tk.BooleanVar(
+            value=self.profile.apply_cdp_overrides if self.profile else True
+        )
+        ttk.Checkbutton(
+            presets_frame,
+            text="Apply UA/language/TZ/geo via CDP",
+            variable=self.cdp_var,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        self.webrtc_var = tk.BooleanVar(
+            value=self.profile.force_webrtc_proxy if self.profile else True
+        )
+        ttk.Checkbutton(
+            presets_frame,
+            text="WebRTC via proxy only (no UDP)",
+            variable=self.webrtc_var,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 4))
+
+        self.preset_cb.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        self._set_preset(initial_preset_key, apply_fields=False)
+
         ttk.Label(main, text="Операционная система:").grid(row=4, column=0, sticky="w", pady=(6, 0))
         self.os_var = tk.StringVar(value="Windows")
         ttk.Combobox(
@@ -239,7 +300,7 @@ class ProfileDialog:
         _sw_entry = ttk.Entry(res_row, textvariable=self.screen_width_var, width=8)
         _sw_entry.pack(side="left")
         self._attach_context_menu(_sw_entry)
-        ttk.Label(res_row, text="×").pack(side="left", padx=4)
+        ttk.Label(res_row, text="Г-").pack(side="left", padx=4)
         _sh_entry = ttk.Entry(res_row, textvariable=self.screen_height_var, width=8)
         _sh_entry.pack(side="left")
         self._attach_context_menu(_sh_entry)
@@ -290,8 +351,8 @@ class ProfileDialog:
 
         actions = ttk.Frame(proxy_tab)
         actions.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-        ttk.Button(actions, text="🔌 Автопрокси", command=self._lab_auto_best).grid(row=0, column=0, sticky="w")
-        ttk.Button(actions, text="⟳ Следующий", command=self._lab_auto_next).grid(row=0, column=1, sticky="w", padx=(6, 0))
+        ttk.Button(actions, text="🔧 Автопрокси", command=self._lab_auto_best).grid(row=0, column=0, sticky="w")
+        ttk.Button(actions, text="⏭ Следующий", command=self._lab_auto_next).grid(row=0, column=1, sticky="w", padx=(6, 0))
 
         lab_tab = ttk.Frame(notebook)
         notebook.add(lab_tab, text="Proxy Lab")
@@ -303,15 +364,6 @@ class ProfileDialog:
         )
         self.lab_frame.pack(fill="both", expand=True, padx=6, pady=6)
 
-        # Кнопки пресетов
-        preset_frame = ttk.Frame(parent)
-        preset_frame.pack(fill="x", padx=6, pady=(8, 0))
-        
-        ttk.Button(preset_frame, text="🇰🇿 Казахстан", command=self.apply_kazakhstan_preset).pack(side="left", padx=(0, 6))
-        ttk.Button(preset_frame, text="🇺🇸 США", command=self.apply_usa_preset).pack(side="left", padx=(0, 6))
-        ttk.Button(preset_frame, text="🇷🇺 Россия", command=self.apply_russia_preset).pack(side="left", padx=(0, 6))
-        ttk.Button(preset_frame, text="🇩🇪 Германия", command=self.apply_germany_preset).pack(side="left", padx=(0, 6))
-        
         ttk.Button(parent, text="🎲 Случайные настройки", command=self.generate_random_profile).pack(fill="x", padx=6, pady=(8, 0))
 
         def _sync_lab(*_):
@@ -441,6 +493,9 @@ class ProfileDialog:
                 self.profile.proxy_password = self.pass_var.get().strip()
                 self.profile.tags = self.tags_var.get().strip()
                 self.profile.os_name = self.os_var.get().strip() or "Windows"
+                self.profile.preset = self._preset_key
+                self.profile.apply_cdp_overrides = bool(self.cdp_var.get())
+                self.profile.force_webrtc_proxy = bool(self.webrtc_var.get())
                 self.profile.updated = datetime.now().isoformat()
                 self.result = self.profile
             else:
@@ -451,6 +506,9 @@ class ProfileDialog:
                     user_agent=self.ua_var.get().strip(),
                     language=self.lang_var.get().strip(),
                     timezone=self.tz_var.get().strip(),
+                    preset=self._preset_key,
+                    apply_cdp_overrides=bool(self.cdp_var.get()),
+                    force_webrtc_proxy=bool(self.webrtc_var.get()),
                     screen_width=int(self.screen_width_var.get() or "1920"),
                     screen_height=int(self.screen_height_var.get() or "1080"),
                     proxy_scheme=self.scheme_var.get(),
@@ -495,6 +553,12 @@ class ProfileDialog:
         self.screen_height_var.set(str(profile.screen_height))
         self.os_var.set(profile.os_name or "Windows")
         self.tags_var.set(profile.tags or "")
+        if hasattr(self, "_preset_key"):
+            self._set_preset(profile.preset or "none", apply_fields=False)
+        if hasattr(self, "cdp_var"):
+            self.cdp_var.set(bool(profile.apply_cdp_overrides))
+        if hasattr(self, "webrtc_var"):
+            self.webrtc_var.set(bool(profile.force_webrtc_proxy))
 
     def _apply_proxy_from_lab(self, proxy: Proxy, result: Optional[ValidationResult]) -> None:
         self.scheme_var.set(proxy.scheme.lower())
@@ -524,15 +588,12 @@ class ProfileDialog:
 
     def generate_random_ua(self) -> None:
         agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 12.6; rv:125.0) Gecko/20100101 Firefox/125.0",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.120 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.120 Safari/537.36",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.6533.120 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.183 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.6422.141 Safari/537.36",
         ]
-        self.ua_var.set(random.choice(agents))
-
-    def generate_random_resolution(self) -> None:
         presets = [(1920, 1080), (2560, 1440), (1680, 1050), (1600, 900), (1366, 768), (1440, 900), (1536, 864), (1280, 720)]
         width, height = random.choice(presets)
         self.screen_width_var.set(str(width))
@@ -547,14 +608,49 @@ class ProfileDialog:
             "Europe/Moscow",
             "Asia/Tokyo",
             "Asia/Singapore",
+            "Asia/Almaty",
             "Australia/Sydney",
             "America/Sao_Paulo",
         ]
         self.tz_var.set(random.choice(zones))
 
     def generate_random_language(self) -> None:
-        langs = ["en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "ru-RU", "tr-TR", "zh-CN", "pt-BR"]
+        langs = ["en-US", "en-GB", "de-DE", "fr-FR", "es-ES", "ru-RU", "ru-KZ", "kk-KZ", "tr-TR", "zh-CN", "pt-BR"]
         self.lang_var.set(random.choice(langs))
+
+    def _set_preset(self, preset_key: str, apply_fields: bool) -> None:
+        key = preset_key if preset_key in GEO_PRESETS else "none"
+        self._preset_key = key
+        label = PRESET_LABEL_BY_KEY.get(key, PRESET_LABEL_LIST[0])
+        # avoid triggering <<ComboboxSelected>> again
+        if self.preset_label_var.get() != label:
+            self.preset_label_var.set(label)
+        if not apply_fields or key == "none":
+            return
+        cfg = GEO_PRESETS[key]
+        ua = cfg.get("user_agent")
+        if ua:
+            self.ua_var.set(str(ua))
+        lang = cfg.get("accept_language")
+        if lang:
+            self.lang_var.set(str(lang))
+        tz = cfg.get("timezone")
+        if tz:
+            self.tz_var.set(str(tz))
+        country = cfg.get("country")
+        if country is not None:
+            self.country_var.set(str(country))
+        tags = cfg.get("tags")
+        if tags is not None:
+            self.tags_var.set(str(tags))
+        self.scheme_var.set("http")
+        self.cdp_var.set(True)
+        self.webrtc_var.set(True)
+
+    def _on_preset_selected(self, _event=None) -> None:
+        label = (self.preset_label_var.get() or "").strip()
+        preset_key = PRESET_KEY_BY_LABEL.get(label, "none")
+        self._set_preset(preset_key, apply_fields=True)
 
     def generate_random_profile(self) -> None:
         self.generate_random_ua()
@@ -563,44 +659,22 @@ class ProfileDialog:
         self.generate_random_language()
         self.os_var.set(random.choice(["Windows", "macOS", "Linux"]))
         self.tags_var.set("")
+        if hasattr(self, "_preset_key"):
+            self._set_preset("none", apply_fields=False)
+        if hasattr(self, "cdp_var"): self.cdp_var.set(True)
+        if hasattr(self, "webrtc_var"): self.webrtc_var.set(True)
 
     def apply_kazakhstan_preset(self) -> None:
-        """Применяет пресет для Казахстана"""
-        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
-        self.lang_var.set("ru-RU,ru;q=0.9,en;q=0.8")
-        self.tz_var.set("Asia/Almaty")
-        self.country_var.set("KZ")
-        self.scheme_var.set("http")
-        self.tags_var.set("kazakhstan")
+        self._set_preset("kz_almaty", apply_fields=True)
 
     def apply_usa_preset(self) -> None:
-        """Применяет пресет для США"""
-        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
-        self.lang_var.set("en-US,en;q=0.9")
-        self.tz_var.set("America/New_York")
-        self.country_var.set("US")
-        self.scheme_var.set("http")
-        self.tags_var.set("usa")
+        self._set_preset("us_new_york", apply_fields=True)
 
     def apply_russia_preset(self) -> None:
-        """Применяет пресет для России"""
-        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
-        self.lang_var.set("ru-RU,ru;q=0.9,en;q=0.8")
-        self.tz_var.set("Europe/Moscow")
-        self.country_var.set("RU")
-        self.scheme_var.set("http")
-        self.tags_var.set("russia")
+        self._set_preset("ru_moscow", apply_fields=True)
 
     def apply_germany_preset(self) -> None:
-        """Применяет пресет для Германии"""
-        self.ua_var.set("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36")
-        self.lang_var.set("de-DE,de;q=0.9,en;q=0.8")
-        self.tz_var.set("Europe/Berlin")
-        self.country_var.set("DE")
-        self.scheme_var.set("http")
-        self.tags_var.set("germany")
-
-
+        self._set_preset("de_berlin", apply_fields=True)
 
 class BrowserManagerApp:
     def __init__(self) -> None:
@@ -617,7 +691,7 @@ class BrowserManagerApp:
             if icon_path.exists():
                 self.root.iconbitmap(str(icon_path))
         except Exception:
-            pass  # Игнорируем ошибки с иконкой
+            pass  # РРіРЅРѕСЂРёСЂСѓРµРј РѕС€РёР±РєРё СЃ РёРєРѕРЅРєРѕР№
 
         self.store = ProfileStore(PROFILES_PATH)
         self.profiles: List[Profile] = self.store.load()
@@ -850,7 +924,7 @@ class BrowserManagerApp:
         self._save_profiles()
         details = f"{proxy.scheme} {proxy.host}:{proxy.port}"
         if result and result.cc:
-            details += f" · {result.cc}"
+            details += f" В· {result.cc}"
         messagebox.showinfo("AiChrome", f"Подключён прокси ({source}):\n{details}")
         self.status_var.set(f"Прокси обновлён: {details}")
 
@@ -920,6 +994,9 @@ class BrowserManagerApp:
                 extra_flags=flags,
                 allow_system_chrome=True,
                 force_pac=use_pac,
+                preset=profile.preset,
+                apply_cdp_overrides=profile.apply_cdp_overrides,
+                force_webrtc_proxy=profile.force_webrtc_proxy,
             )
         except Exception as exc:
             log.error("Failed to launch Chrome: %s", exc)
@@ -968,3 +1045,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+

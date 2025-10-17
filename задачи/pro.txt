@@ -34,5 +34,5 @@ Traceback (most recent call last):
   File "AiChrome.spec", line 7, in <module>
     project_root = Path(__file__).resolve().parent
 NameError: name '__file__' is not defined. Did you mean: '__name__'?
-Done. EXE ╨▓ ╨┐╨░╨┐╨║╨╡ dist\
+Done. EXE в папке dist\
 Для продолжения нажмите любую клавишу . . .
